@@ -256,7 +256,36 @@ fn key(k: Key, view: &mut View, ctrlx: bool) -> (bool, bool, bool) {
                 view.bufvec[view.cursor_y] = left.to_string();
                 view.bufvec.insert(view.cursor_y + 1, right.to_string());
                 view.cursor_y += 1;
+
+                let indent_levels = left
+                    .as_bytes()
+                    .chunks(4)
+                    .take_while(|ch| ch.len() == 4 && ch.iter().all(|&b| b == b' '))
+                    .count();
+
+                let base = indent_levels * 4;
+
+                if right.trim_end().starts_with("}") {
+                    let base_indent = " ".repeat(base);
+                    let inner_indent = " ".repeat(base + 4);
+
+                
+                    view.bufvec[view.cursor_y].clear();
+                    view.bufvec[view.cursor_y].push_str(&inner_indent);
+
+                    view.bufvec.insert(view.cursor_y + 1, format!("{}{}", base_indent, right));
+
+                    view.cursor_x = base + 8;
+                }
+
+
+
+
                 view.cursor_x = 0;
+                for i in 0..base {
+                    view.bufvec[view.cursor_y].insert(0, ' ');
+                    view.cursor_x += 1;
+                }
                 view.saved = false;
             }
 
