@@ -1,7 +1,8 @@
 [package]
-name = "red"
+name = "gee"
 version = "0.1.0"
 edition = "2024"
+target = "./target"
 
 [dependencies]
 termion = "4.0.6"
