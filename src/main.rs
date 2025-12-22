@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 #![allow(unused)]
 
-
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Error, Write};
 use termion::{event::Key, input::TermRead, raw::IntoRawMode};
@@ -159,6 +158,15 @@ fn key(k: Key, view: &mut View, ctrlx: bool) -> (bool, bool, bool) {
         view.offcol = 0;
     }
 
+    if view.cursor_y >= view.bufvec.len() {
+        view.cursor_y = view.bufvec.len().saturating_sub(1);
+    }
+
+    let len = view.bufvec[view.cursor_y].len();
+    if view.cursor_x > len {
+        view.cursor_x = len;
+    }
+
     if !ctrlx {
         match k {
             Key::Ctrl('z') => {
@@ -183,15 +191,18 @@ fn key(k: Key, view: &mut View, ctrlx: bool) -> (bool, bool, bool) {
                     view.cursor_x = view.cursor_x.min(len);
                 }
             }
+
             Key::Ctrl('b') => {
                 if view.cursor_x > 0 {
                     let line = &view.bufvec[view.cursor_y];
                     let bytes = line.as_bytes();
 
-                    let can_jump4 = view.cursor_x >= 4
-                        && bytes[view.cursor_x - 4..view.cursor_x].iter().all(|&b| b == b' ');
+                    let can_jump4 = bytes
+                        .get(view.cursor_x.saturating_sub(4)..view.cursor_x)
+                        .is_some_and(|s| s.len() == 4 && s.iter().all(|&b| b == b' '));
 
-                    view.cursor_x -= if can_jump4 { 4 } else { 1 };
+                    let step = if can_jump4 { 4 } else { 1 };
+                    view.cursor_x = view.cursor_x.saturating_sub(step);
                 } else if view.cursor_y > 0 {
                     view.cursor_y -= 1;
                     view.cursor_x = view.bufvec[view.cursor_y].len();
@@ -204,8 +215,9 @@ fn key(k: Key, view: &mut View, ctrlx: bool) -> (bool, bool, bool) {
                 let len = bytes.len();
 
                 if view.cursor_x < len {
-                    let can_jump4 = view.cursor_x + 4 <= len
-                        && bytes[view.cursor_x..view.cursor_x + 4].iter().all(|&b| b == b' ');
+                    let can_jump4 = bytes
+                        .get(view.cursor_x..view.cursor_x + 4)
+                        .is_some_and(|s| s.iter().all(|&b| b == b' '));
 
                     view.cursor_x += if can_jump4 { 4 } else { 1 };
                 } else if view.cursor_y + 1 < view.bufvec.len() {
@@ -213,7 +225,6 @@ fn key(k: Key, view: &mut View, ctrlx: bool) -> (bool, bool, bool) {
                     view.cursor_x = 0;
                 }
             }
-
 
             Key::Ctrl('a') => {
                 view.cursor_x = 0;
@@ -227,12 +238,11 @@ fn key(k: Key, view: &mut View, ctrlx: bool) -> (bool, bool, bool) {
                 let line = &view.bufvec[view.cursor_y];
                 let bytes = line.as_bytes();
                 let len = bytes.len();
-                let can_jump4 = view.cursor_x >= 4
-                        && bytes[view.cursor_x - 4..view.cursor_x].iter().all(|&b| b == b' ');
+                let can_jump4 = bytes
+                    .get(view.cursor_x.saturating_sub(4)..view.cursor_x)
+                    .is_some_and(|s| s.len() == 4 && s.iter().all(|&b| b == b' '));
 
-                let moves = if can_jump4 {4} else {1};
-
-
+                let moves = (if can_jump4 { 4 } else { 1 }).min(view.cursor_x);
 
                 if view.cursor_x > 0 {
                     for k in 0..moves {
@@ -249,7 +259,6 @@ fn key(k: Key, view: &mut View, ctrlx: bool) -> (bool, bool, bool) {
 
                 view.saved = false;
             }
-
             Key::Char('\n') | Key::Char('\r') => {
                 let cur_line = view.bufvec[view.cursor_y].clone();
                 let (left, right) = cur_line.split_at(view.cursor_x);
@@ -257,39 +266,41 @@ fn key(k: Key, view: &mut View, ctrlx: bool) -> (bool, bool, bool) {
                 view.bufvec.insert(view.cursor_y + 1, right.to_string());
                 view.cursor_y += 1;
 
+                // Count leading indent in groups of 4 spaces (from the left part)
                 let indent_levels = left
                     .as_bytes()
                     .chunks(4)
                     .take_while(|ch| ch.len() == 4 && ch.iter().all(|&b| b == b' '))
                     .count();
-
                 let base = indent_levels * 4;
 
-                if right.trim_end().starts_with("}") {
+                // Special case: cursor was between { and } (right starts with })
+                if right.trim_start().starts_with('}') {
                     let base_indent = " ".repeat(base);
                     let inner_indent = " ".repeat(base + 4);
 
-                
+                    // Current (new) line becomes the indented blank line
                     view.bufvec[view.cursor_y].clear();
                     view.bufvec[view.cursor_y].push_str(&inner_indent);
+                    view.cursor_x = base + 4;
 
-                    view.bufvec.insert(view.cursor_y + 1, format!("{}{}", base_indent, right));
+                    // Next line becomes the closing brace line
+                    view.bufvec.insert(
+                        view.cursor_y + 1,
+                        format!("{}{}", base_indent, right.trim_start()),
+                    );
 
-                    view.cursor_x = base + 8;
+                    view.saved = false;
+                    // IMPORTANT: don't also apply the normal base indent after this
+                    return (true, false, false);
                 }
 
+                // Normal case: just indent new line to base
+                view.bufvec[view.cursor_y].insert_str(0, &" ".repeat(base));
+                view.cursor_x = base;
 
-
-
-                view.cursor_x = 0;
-                for i in 0..base {
-                    view.bufvec[view.cursor_y].insert(0, ' ');
-                    view.cursor_x += 1;
-                }
                 view.saved = false;
             }
-
-            
             Key::Char('\t') => {
                 for _ in 0..4 {
                     view.bufvec[view.cursor_y].insert(view.cursor_x, ' ');
@@ -297,6 +308,10 @@ fn key(k: Key, view: &mut View, ctrlx: bool) -> (bool, bool, bool) {
                 }
             }
 
+            Key::Char('{') => {
+                view.bufvec[view.cursor_y].insert_str(view.cursor_x, "{}");
+                view.cursor_x += 1;
+            }
 
             Key::Char(c) if !c.is_control() => {
                 if view.bufvec.is_empty() {
