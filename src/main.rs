@@ -4,6 +4,8 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Error, Write};
 use termion::{event::Key, input::TermRead, raw::IntoRawMode};
+use termion::screen::AlternateScreen;
+use termion::screen::IntoAlternateScreen;
 
 pub struct View<'a> {
     pub bufvec: &'a mut Vec<String>,
@@ -63,9 +65,10 @@ fn main() -> io::Result<()> {
     };
 
     let stdin = std::io::stdin();
-    let _raw = io::stdout().into_raw_mode()?;
+    let stdout = io::stdout().into_raw_mode()?.into_alternate_screen()?;
+    let mut screen_out = AlternateScreen::from(stdout);
 
-    frame(&screen);
+    frame(&mut screen_out, &screen);
 
     let mut isctrx = false;
 
@@ -99,13 +102,13 @@ fn main() -> io::Result<()> {
 
         isctrx = keyh.1;
         clamp(&mut screen);
-        frame(&screen);
+        frame(&mut screen_out, &screen);
     }
 
     Ok(())
 }
 
-fn frame(view: &View) {
+fn frame<W: Write>(out: &mut W, view: &View) {
     let mut screen: String = String::new();
 
     screen.push_str(CURSOR_HIDE);
@@ -142,11 +145,9 @@ fn frame(view: &View) {
     let scr_col = view.cursor_x.saturating_sub(view.offcol) + 1;
     screen.push_str(&goto(scr_row as u16, scr_col as u16));
 
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
-    out.write_all(screen.as_bytes())
-        .expect("Screen render error");
+    out.write_all(screen.as_bytes()).expect("Screen render error");
     out.flush().expect("Cannot flush screen");
+
 }
 
 fn key(k: Key, view: &mut View, ctrlx: bool) -> (bool, bool, bool) {
