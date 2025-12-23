@@ -7,6 +7,14 @@ use termion::{event::Key, input::TermRead, raw::IntoRawMode};
 use termion::screen::AlternateScreen;
 use termion::screen::IntoAlternateScreen;
 
+pub struct Status {
+	pub saved: bool,
+	pub quit: bool,
+	pub ctrlx: bool,
+	pub save: bool
+}
+
+
 pub struct View<'a> {
     pub bufvec: &'a mut Vec<String>,
     pub cursor_x: usize,
@@ -16,7 +24,7 @@ pub struct View<'a> {
     pub terminal_w: usize,
     pub terminal_h: usize,
     pub endline: String,
-    pub saved: bool,
+    pub status: Status
 }
 
 const ESC: &str = "\x1b";
@@ -61,7 +69,7 @@ fn main() -> io::Result<()> {
         terminal_h: (rows as usize),
         offcol: 0,
         endline: "Red editor v0.1.0".to_string(),
-        saved: true,
+        status: Status { saved: true, quit: false, ctrlx: false, save: false }
     };
 
     let stdin = std::io::stdin();
@@ -70,15 +78,13 @@ fn main() -> io::Result<()> {
 
     frame(&mut screen_out, &screen);
 
-    let mut isctrx = false;
-
     for k in stdin.keys() {
         let k = k?;
-        let keyh = key(k, &mut screen, isctrx);
+        key(k, &mut screen);
 
         clamp(&mut screen);
 
-        if keyh.2 {
+        if screen.status.save {
             use std::io::{Seek, SeekFrom};
 
             working.seek(SeekFrom::Start(0))?;
@@ -88,19 +94,19 @@ fn main() -> io::Result<()> {
                 .expect("no write");
             working.flush().expect("Error flushing");
 
-            screen.saved = true;
+            screen.status.saved = true;
             screen.endline = format!("Wrote to {}", &pathstr);
+            screen.status.save = false;
         }
 
-        if !keyh.0 {
-            if screen.saved || keyh.2 {
+        if screen.status.quit {
+            if screen.status.saved {
                 break;
             } else {
                 screen.endline = format!("{} not saved", &pathstr);
+                screen.status.quit = false;
             }
         }
-
-        isctrx = keyh.1;
         clamp(&mut screen);
         frame(&mut screen_out, &screen);
     }
@@ -150,7 +156,7 @@ fn frame<W: Write>(out: &mut W, view: &View) {
 
 }
 
-fn key(k: Key, view: &mut View, ctrlx: bool) -> (bool, bool, bool) {
+fn key(k: Key, view: &mut View) {
     if view.bufvec.is_empty() {
         view.bufvec.push(String::new());
         view.cursor_x = 0;
@@ -168,12 +174,14 @@ fn key(k: Key, view: &mut View, ctrlx: bool) -> (bool, bool, bool) {
         view.cursor_x = len;
     }
 
-    if !ctrlx {
+    if !view.status.ctrlx {
         match k {
             Key::Ctrl('z') => {
-                return (false, false, true);
+                view.status.quit = true;
+                view.status.save = true;
+            	return;
             }
-            Key::Ctrl('x') => return (true, true, false),
+            Key::Ctrl('x') => {view.status.ctrlx = true;},
 
             Key::Ctrl('n') | Key::Down => {
                 // Down
@@ -193,7 +201,7 @@ fn key(k: Key, view: &mut View, ctrlx: bool) -> (bool, bool, bool) {
                 }
             }
 
-            Key::Ctrl('b') => {
+            Key::Ctrl('b') | Key::Left => {
                 if view.cursor_x > 0 {
                     let line = &view.bufvec[view.cursor_y];
                     let bytes = line.as_bytes();
@@ -210,7 +218,7 @@ fn key(k: Key, view: &mut View, ctrlx: bool) -> (bool, bool, bool) {
                 }
             }
 
-            Key::Ctrl('f') => {
+            Key::Ctrl('f') |Key::Right => {
                 let line = &view.bufvec[view.cursor_y];
                 let bytes = line.as_bytes();
                 let len = bytes.len();
@@ -258,7 +266,7 @@ fn key(k: Key, view: &mut View, ctrlx: bool) -> (bool, bool, bool) {
                     view.bufvec[view.cursor_y].push_str(&cur);
                 }
 
-                view.saved = false;
+                view.status.saved = false;
             }
             Key::Char('\n') | Key::Char('\r') => {
                 let cur_line = view.bufvec[view.cursor_y].clone();
@@ -275,33 +283,29 @@ fn key(k: Key, view: &mut View, ctrlx: bool) -> (bool, bool, bool) {
                     .count();
                 let base = indent_levels * 4;
 
-                // Special case: cursor was between { and } (right starts with })
                 if right.trim_start().starts_with('}') {
                     let base_indent = " ".repeat(base);
                     let inner_indent = " ".repeat(base + 4);
 
-                    // Current (new) line becomes the indented blank line
                     view.bufvec[view.cursor_y].clear();
                     view.bufvec[view.cursor_y].push_str(&inner_indent);
                     view.cursor_x = base + 4;
 
-                    // Next line becomes the closing brace line
                     view.bufvec.insert(
                         view.cursor_y + 1,
                         format!("{}{}", base_indent, right.trim_start()),
                     );
 
-                    view.saved = false;
-                    // IMPORTANT: don't also apply the normal base indent after this
-                    return (true, false, false);
+                    view.status.saved = false;
+                    return;
                 }
 
-                // Normal case: just indent new line to base
                 view.bufvec[view.cursor_y].insert_str(0, &" ".repeat(base));
                 view.cursor_x = base;
 
-                view.saved = false;
+                view.status.saved = false;
             }
+
             Key::Char('\t') => {
                 for _ in 0..4 {
                     view.bufvec[view.cursor_y].insert(view.cursor_x, ' ');
@@ -327,19 +331,18 @@ fn key(k: Key, view: &mut View, ctrlx: bool) -> (bool, bool, bool) {
 
                 view.bufvec[view.cursor_y].insert(view.cursor_x, c);
                 view.cursor_x += 1;
-                view.saved = false;
+                view.status.saved = false;
             }
 
             _ => {}
         }
     } else {
         match k {
-            Key::Ctrl('c') => return (false, false, false),
-            Key::Ctrl('s') => return (true, false, true),
+            Key::Ctrl('c') => {view.status.ctrlx = false; view.status.quit = true},
+            Key::Ctrl('s') => return {view.status.ctrlx = false; view.status.save = true;},
             _ => {}
         }
     }
-    (true, false, false)
 }
 
 fn clamp(view: &mut View) {
