@@ -349,6 +349,10 @@ fn key(k: Key, view: &mut View) {
                 }
             }
 
+            Key::Ctrl('y') => {
+                buf_insert_lines(view, &view.kill.clone());
+            }
+
             Key::Char('\n') | Key::Char('\r') => {
                 let cur_line = view.bufvec[view.cursor_y].clone();
                 let (left, right) = cur_line.split_at(view.cursor_x);
