@@ -13,3 +13,7 @@ Emacs features `gee` supports:
 - save bindings: C-x C-s, C-z (this does NOT suspend, saves and exits)
 - quit: C-x C-c
  => more to be added soon.
+
+ ## Use of Generative A.I.
+ ChatGPT 5.1 was used for minor debugging purposes to a limited extent throughout src/main.rs.
+ OpenAI Codex was used to write multi-line-insert and delete logic.

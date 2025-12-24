@@ -3,18 +3,18 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Error, Write};
-use termion::{event::Key, input::TermRead, raw::IntoRawMode};
 use termion::screen::AlternateScreen;
 use termion::screen::IntoAlternateScreen;
+use termion::{event::Key, input::TermRead, raw::IntoRawMode};
 
 pub struct Status {
-	pub saved: bool,
-	pub quit: bool,
-	pub ctrlx: bool,
-	pub save: bool,
-    pub forcequit: bool
+    pub saved: bool,
+    pub quit: bool,
+    pub ctrlx: bool,
+    pub save: bool,
+    pub forcequit: bool,
+    pub selecting: bool,
 }
-
 
 pub struct View<'a> {
     pub bufvec: &'a mut Vec<String>,
@@ -24,9 +24,16 @@ pub struct View<'a> {
     pub offcol: usize,
     pub terminal_w: usize,
     pub terminal_h: usize,
+    pub mark: (usize, usize),
     pub endline: String,
     pub kill: String,
-    pub status: Status
+    pub status: Status,
+}
+
+impl<'a> View<'a> {
+    fn trueloc(self: &Self) -> (usize, usize) {
+        (self.cursor_x, self.cursor_y)
+    }
 }
 
 const ESC: &str = "\x1b";
@@ -67,12 +74,20 @@ fn main() -> io::Result<()> {
         cursor_x: 0,
         cursor_y: 0,
         offset: 0,
+        mark: (0, 0),
         terminal_w: (cols as usize),
         terminal_h: (rows as usize),
         offcol: 0,
-        endline: "Red editor v0.1.0".to_string(),
+        endline: "".to_string(),
         kill: "Example kill text".to_string(),
-        status: Status { saved: true, quit: false, ctrlx: false, save: false, forcequit: false }
+        status: Status {
+            saved: true,
+            quit: false,
+            ctrlx: false,
+            save: false,
+            forcequit: false,
+            selecting: false,
+        },
     };
 
     let stdin = std::io::stdin();
@@ -86,6 +101,12 @@ fn main() -> io::Result<()> {
         key(k, &mut screen);
 
         clamp(&mut screen);
+
+        if screen.status.selecting {
+            screen.endline = "Selecting ".to_string();
+        } else {
+            screen.endline = "".to_string();
+        }
 
         if screen.status.save {
             use std::io::{Seek, SeekFrom};
@@ -125,6 +146,27 @@ fn frame<W: Write>(out: &mut W, view: &View) {
 
     let rrows = view.terminal_h.saturating_sub(1);
 
+    let mut sel_start_x = 0;
+    let mut sel_start_y = 0;
+    let mut sel_end_x = 0;
+    let mut sel_end_y = 0;
+
+    if view.status.selecting {
+        let cursor_before_mark = view.cursor_y < view.mark.1
+            || (view.cursor_y == view.mark.1 && view.cursor_x <= view.mark.0);
+        if cursor_before_mark {
+            sel_start_x = view.cursor_x;
+            sel_start_y = view.cursor_y;
+            sel_end_x = view.mark.0;
+            sel_end_y = view.mark.1;
+        } else {
+            sel_start_x = view.mark.0;
+            sel_start_y = view.mark.1;
+            sel_end_x = view.cursor_x;
+            sel_end_y = view.cursor_y;
+        }
+    }
+
     for n in 0..rrows {
         let i: usize = n + view.offset;
 
@@ -142,21 +184,41 @@ fn frame<W: Write>(out: &mut W, view: &View) {
 
         let start = view.offcol.min(line.len());
         let end = (view.offcol + view.terminal_w).min(line.len());
+
+        if view.status.selecting
+            && (i > sel_start_y || (i == sel_start_y && sel_start_x < line.len()))
+            && (i < sel_end_y || (i == sel_end_y && sel_end_x > 0))
+        {
+            let line_len = line.len();
+            let line_sel_start = if i == sel_start_y { sel_start_x } else { 0 };
+            let line_sel_end = if i == sel_end_y { sel_end_x } else { line_len };
+            let vis_sel_start = line_sel_start.max(start);
+            let vis_sel_end = line_sel_end.min(end);
+
+            if vis_sel_start < vis_sel_end {
+                screen.push_str(&line[start..vis_sel_start].replace("\t", "    "));
+                screen.push_str(STYLE_INVERT_ON);
+                screen.push_str(&line[vis_sel_start..vis_sel_end].replace("\t", "    "));
+                screen.push_str(STYLE_INVERT_OFF);
+                screen.push_str(&line[vis_sel_end..end].replace("\t", "    "));
+                continue;
+            }
+        }
+
         screen.push_str(&line[start..end].replace("\t", "    "));
     }
 
     screen.push_str(&goto(view.terminal_h as u16, 1));
     screen.push_str(CLEAR_LINE);
     screen.push_str(&view.endline);
-
     screen.push_str(CURSOR_SHOW);
     let scr_row = view.cursor_y.saturating_sub(view.offset) + 1;
     let scr_col = view.cursor_x.saturating_sub(view.offcol) + 1;
     screen.push_str(&goto(scr_row as u16, scr_col as u16));
 
-    out.write_all(screen.as_bytes()).expect("Screen render error");
+    out.write_all(screen.as_bytes())
+        .expect("Screen render error");
     out.flush().expect("Cannot flush screen");
-
 }
 
 fn key(k: Key, view: &mut View) {
@@ -182,9 +244,11 @@ fn key(k: Key, view: &mut View) {
             Key::Ctrl('z') => {
                 view.status.quit = true;
                 view.status.save = true;
-            	return;
+                return;
             }
-            Key::Ctrl('x') => {view.status.ctrlx = true;},
+            Key::Ctrl('x') => {
+                view.status.ctrlx = true;
+            }
 
             Key::Ctrl('n') | Key::Down => {
                 // Down
@@ -221,7 +285,7 @@ fn key(k: Key, view: &mut View) {
                 }
             }
 
-            Key::Ctrl('f') |Key::Right => {
+            Key::Ctrl('f') | Key::Right => {
                 let line = &view.bufvec[view.cursor_y];
                 let bytes = line.as_bytes();
                 let len = bytes.len();
@@ -270,7 +334,21 @@ fn key(k: Key, view: &mut View) {
                 }
 
                 view.status.saved = false;
+                view.status.selecting = false;
             }
+
+            Key::Null | Key::Ctrl(' ') => {
+                view.mark = view.trueloc();
+                view.status.selecting = true;
+            }
+
+            Key::Ctrl('w') => {
+                if view.status.selecting {
+                    buf_kill_lines(view, view.mark);
+                    view.status.selecting = false;
+                }
+            }
+
             Key::Char('\n') | Key::Char('\r') => {
                 let cur_line = view.bufvec[view.cursor_y].clone();
                 let (left, right) = cur_line.split_at(view.cursor_x);
@@ -300,6 +378,7 @@ fn key(k: Key, view: &mut View) {
                     );
 
                     view.status.saved = false;
+                    view.status.selecting = false;
                     return;
                 }
 
@@ -307,6 +386,7 @@ fn key(k: Key, view: &mut View) {
                 view.cursor_x = base;
 
                 view.status.saved = false;
+                view.status.selecting = false;
             }
 
             Key::Char('\t') => {
@@ -319,6 +399,8 @@ fn key(k: Key, view: &mut View) {
             Key::Char('{') => {
                 view.bufvec[view.cursor_y].insert_str(view.cursor_x, "{}");
                 view.cursor_x += 1;
+                view.status.selecting = false;
+                view.status.saved = false;
             }
 
             Key::Char(c) if !c.is_control() => {
@@ -335,15 +417,25 @@ fn key(k: Key, view: &mut View) {
                 view.bufvec[view.cursor_y].insert(view.cursor_x, c);
                 view.cursor_x += 1;
                 view.status.saved = false;
+                view.status.selecting = false;
             }
 
             _ => {}
         }
     } else {
         match k {
-            Key::Ctrl('c') => {view.status.ctrlx = false; view.status.quit = true},
-            Key::Ctrl('s') => {view.status.ctrlx = false; view.status.save = true;},
-            Key::Char('x') => {view.status.forcequit = true; view.status.quit = true;}
+            Key::Ctrl('c') => {
+                view.status.ctrlx = false;
+                view.status.quit = true
+            }
+            Key::Ctrl('s') => {
+                view.status.ctrlx = false;
+                view.status.save = true;
+            }
+            Key::Char('x') => {
+                view.status.forcequit = true;
+                view.status.quit = true;
+            }
             _ => {}
         }
     }
@@ -372,15 +464,172 @@ fn buf_insert_lines(view: &mut View, insert: &String) {
     // with multiple lines. This function correctly handles multi-line-insertion by adding new rows
     // and splitting existing ones. It may be helpful to referece the 'enter' logic in key().
     // Replace the following todo!() with your code.
-    todo!("Insert multiple lines");
+    if insert.is_empty() {
+        return;
+    }
+
+    if view.bufvec.is_empty() {
+        view.bufvec.push(String::new());
+        view.cursor_y = 0;
+        view.cursor_x = 0;
+    }
+
+    if view.cursor_y >= view.bufvec.len() {
+        view.cursor_y = view.bufvec.len() - 1;
+    }
+    view.cursor_x = view.cursor_x.min(view.bufvec[view.cursor_y].len());
+
+    let parts: Vec<&str> = insert.split('\n').collect();
+    if parts.len() == 1 {
+        view.bufvec[view.cursor_y].insert_str(view.cursor_x, insert);
+        view.cursor_x += insert.len();
+        view.status.saved = false;
+        return;
+    }
+
+    let cur_line = view.bufvec[view.cursor_y].clone();
+    let (left, right) = cur_line.split_at(view.cursor_x);
+
+    let mut new_lines: Vec<String> = Vec::with_capacity(parts.len());
+    new_lines.push(format!("{}{}", left, parts[0]));
+
+    for segment in parts.iter().skip(1).take(parts.len().saturating_sub(2)) {
+        new_lines.push((*segment).to_string());
+    }
+
+    new_lines.push(format!("{}{}", parts.last().unwrap(), right));
+
+    view.bufvec[view.cursor_y] = new_lines[0].clone();
+    for (idx, line) in new_lines.iter().enumerate().skip(1) {
+        view.bufvec.insert(view.cursor_y + idx, line.clone());
+    }
+
+    view.cursor_y += parts.len() - 1;
+    view.cursor_x = parts.last().unwrap().len();
+    view.status.saved = false;
 }
 
-fn buf_kill_lines(view: &mut View, /* start deleting from current cursor (view.cursor_x, view.cursor_y) */ to: (usize, usize)) {
+fn buf_kill_lines(
+    view: &mut View,
+    /* start deleting from current cursor (view.cursor_x, view.cursor_y) */
+    to: (usize, usize),
+) {
     // view.bufvec holds elements by lines. This logic can break if we are to delete a large string
     // with multiple lines. This function correctly handles multi-line-deletion by purging unused
     // lines and merging remaining ones. It may be helpful to referece the 'backspace' logic in key().
     // After deletion, this function will copy the deleted text to view.kill for future paste.
-    todo!("Delete multiple lines, from current cursor to another location");
+    if view.bufvec.is_empty() {
+        view.kill.clear();
+        return;
+    }
+
+    let mut start_y = view.cursor_y.min(view.bufvec.len().saturating_sub(1));
+    let mut start_x = view.cursor_x.min(view.bufvec[start_y].len());
+
+    let mut end_y = to.1.min(view.bufvec.len().saturating_sub(1));
+    let mut end_x = to.0.min(view.bufvec[end_y].len());
+
+    if (end_y < start_y) || (end_y == start_y && end_x < start_x) {
+        std::mem::swap(&mut start_y, &mut end_y);
+        std::mem::swap(&mut start_x, &mut end_x);
+    }
+
+    if start_y == end_y && start_x == end_x {
+        view.kill.clear();
+        return;
+    }
+
+    if start_y == end_y {
+        let line = &view.bufvec[start_y];
+        view.kill = line[start_x..end_x].to_string();
+        let new_line = format!("{}{}", &line[..start_x], &line[end_x..]);
+        view.bufvec[start_y] = new_line;
+    } else {
+        let mut killed = String::new();
+        killed.push_str(&view.bufvec[start_y][start_x..]);
+        killed.push('\n');
+
+        for line in &view.bufvec[start_y + 1..end_y] {
+            killed.push_str(line);
+            killed.push('\n');
+        }
+        killed.push_str(&view.bufvec[end_y][..end_x]);
+
+        let prefix = view.bufvec[start_y][..start_x].to_string();
+        let suffix = view.bufvec[end_y][end_x..].to_string();
+
+        view.bufvec[start_y] = format!("{}{}", prefix, suffix);
+
+        for _ in 0..(end_y - start_y) {
+            view.bufvec.remove(start_y + 1);
+        }
+
+        view.kill = killed;
+    }
+
+    view.cursor_x = start_x;
+    view.cursor_y = start_y;
+    view.status.saved = false;
 }
 
 // Add test cases here. Make the test self-contained, with your example view and cursor defaults.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_view<'a>(bufvec: &'a mut Vec<String>, cursor_x: usize, cursor_y: usize) -> View<'a> {
+        View {
+            bufvec,
+            cursor_x,
+            cursor_y,
+            offset: 0,
+            offcol: 0,
+            terminal_w: 80,
+            terminal_h: 24,
+            mark: (0, 0),
+            endline: String::new(),
+            kill: String::new(),
+            status: Status {
+                saved: true,
+                quit: false,
+                ctrlx: false,
+                save: false,
+                forcequit: false,
+                selecting: false,
+            },
+        }
+    }
+
+    #[test]
+    fn insert_lines_splits_existing_row() {
+        let mut buf = vec!["abcde".to_string()];
+        let mut view = make_view(&mut buf, 2, 0);
+
+        buf_insert_lines(&mut view, &"123\n456".to_string());
+
+        let expected = vec!["ab123".to_string(), "456cde".to_string()];
+        assert_eq!(view.bufvec.as_slice(), expected.as_slice());
+        assert_eq!(view.cursor_y, 1);
+        assert_eq!(view.cursor_x, 3);
+        assert!(!view.status.saved);
+    }
+
+    #[test]
+    fn kill_lines_merges_spanning_rows() {
+        let mut buf = vec![
+            "hello world".to_string(),
+            "second line".to_string(),
+            "third".to_string(),
+        ];
+        let mut view = make_view(&mut buf, 3, 2);
+
+        buf_kill_lines(&mut view, (6, 0));
+
+        let expected = vec!["hello rd".to_string()];
+        assert_eq!(view.bufvec.as_slice(), expected.as_slice());
+        assert_eq!(view.kill, "world\nsecond line\nthi");
+        assert_eq!(view.cursor_y, 0);
+        assert_eq!(view.cursor_x, 6);
+        assert!(!view.status.saved);
+    }
+}
