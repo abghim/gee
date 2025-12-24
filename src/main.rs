@@ -11,7 +11,8 @@ pub struct Status {
 	pub saved: bool,
 	pub quit: bool,
 	pub ctrlx: bool,
-	pub save: bool
+	pub save: bool,
+    pub forcequit: bool
 }
 
 
@@ -24,6 +25,7 @@ pub struct View<'a> {
     pub terminal_w: usize,
     pub terminal_h: usize,
     pub endline: String,
+    pub kill: String,
     pub status: Status
 }
 
@@ -69,7 +71,8 @@ fn main() -> io::Result<()> {
         terminal_h: (rows as usize),
         offcol: 0,
         endline: "Red editor v0.1.0".to_string(),
-        status: Status { saved: true, quit: false, ctrlx: false, save: false }
+        kill: "Example kill text".to_string(),
+        status: Status { saved: true, quit: false, ctrlx: false, save: false, forcequit: false }
     };
 
     let stdin = std::io::stdin();
@@ -100,7 +103,7 @@ fn main() -> io::Result<()> {
         }
 
         if screen.status.quit {
-            if screen.status.saved {
+            if screen.status.saved || screen.status.forcequit {
                 break;
             } else {
                 screen.endline = format!("{} not saved", &pathstr);
@@ -339,7 +342,8 @@ fn key(k: Key, view: &mut View) {
     } else {
         match k {
             Key::Ctrl('c') => {view.status.ctrlx = false; view.status.quit = true},
-            Key::Ctrl('s') => return {view.status.ctrlx = false; view.status.save = true;},
+            Key::Ctrl('s') => {view.status.ctrlx = false; view.status.save = true;},
+            Key::Char('x') => {view.status.forcequit = true; view.status.quit = true;}
             _ => {}
         }
     }
@@ -362,3 +366,21 @@ fn clamp(view: &mut View) {
         view.offcol = view.cursor_x + 1 - view.terminal_w;
     }
 }
+
+fn buf_insert_lines(view: &mut View, insert: &String) {
+    // view.bufvec holds elements by lines. This logic can break if we are to insert a large string
+    // with multiple lines. This function correctly handles multi-line-insertion by adding new rows
+    // and splitting existing ones. It may be helpful to referece the 'enter' logic in key().
+    // Replace the following todo!() with your code.
+    todo!("Insert multiple lines");
+}
+
+fn buf_kill_lines(view: &mut View, /* start deleting from current cursor (view.cursor_x, view.cursor_y) */ to: (usize, usize)) {
+    // view.bufvec holds elements by lines. This logic can break if we are to delete a large string
+    // with multiple lines. This function correctly handles multi-line-deletion by purging unused
+    // lines and merging remaining ones. It may be helpful to referece the 'backspace' logic in key().
+    // After deletion, this function will copy the deleted text to view.kill for future paste.
+    todo!("Delete multiple lines, from current cursor to another location");
+}
+
+// Add test cases here. Make the test self-contained, with your example view and cursor defaults.
