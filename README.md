@@ -17,3 +17,4 @@ Emacs features `gee` supports:
  ## Use of Generative A.I.
  ChatGPT 5.1 was used for minor debugging purposes to a limited extent throughout src/main.rs.
  OpenAI Codex was used to write multi-line-insert and delete logic.
+ OpenAI Codex was used to Write Ctrl-d forward deletion logic.

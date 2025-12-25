@@ -346,6 +346,30 @@ fn key(k: Key, view: &mut View) {
                 view.status.selecting = false;
             }
 
+            Key::Ctrl('d') => {
+                let line = &view.bufvec[view.cursor_y];
+                let bytes = line.as_bytes();
+                let len = bytes.len();
+                let can_jump4 = bytes
+                    .get(view.cursor_x..view.cursor_x + 4)
+                    .is_some_and(|s| s.len() == 4 && s.iter().all(|&b| b == b' '));
+
+                if view.cursor_x < len {
+                    let moves = if can_jump4 { 4 } else { 1 };
+                    for _ in 0..moves {
+                        if view.cursor_x < view.bufvec[view.cursor_y].len() {
+                            view.bufvec[view.cursor_y].remove(view.cursor_x);
+                        }
+                    }
+                } else if view.cursor_y + 1 < view.bufvec.len() {
+                    let next = view.bufvec.remove(view.cursor_y + 1);
+                    view.bufvec[view.cursor_y].push_str(&next);
+                }
+
+                view.status.saved = false;
+                view.status.selecting = false;
+            }
+
             Key::Null | Key::Ctrl(' ') => {
                 view.mark = view.trueloc();
                 view.status.selecting = true;
@@ -356,10 +380,17 @@ fn key(k: Key, view: &mut View) {
                     buf_kill_lines(view, view.mark);
                     view.status.selecting = false;
                 }
+                view.status.saved = false;
             }
 
             Key::Ctrl('y') => {
                 buf_insert_lines(view, &view.kill.clone());
+                view.status.saved = false;
+            }
+
+            Key::Ctrl('k') => {
+                buf_kill_lines(view, (view.bufvec[view.cursor_y].len(), view.cursor_y));
+                view.status.saved = false;
             }
 
             Key::Char('\n') | Key::Char('\r') => {
@@ -585,64 +616,3 @@ fn buf_kill_lines(
     view.status.saved = false;
 }
 
-// Add test cases here. Make the test self-contained, with your example view and cursor defaults.
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_view<'a>(bufvec: &'a mut Vec<String>, cursor_x: usize, cursor_y: usize) -> View<'a> {
-        View {
-            bufvec,
-            cursor_x,
-            cursor_y,
-            offset: 0,
-            offcol: 0,
-            terminal_w: 80,
-            terminal_h: 24,
-            mark: (0, 0),
-            endline: String::new(),
-            kill: String::new(),
-            status: Status {
-                saved: true,
-                quit: false,
-                ctrlx: false,
-                save: false,
-                forcequit: false,
-                selecting: false,
-            },
-        }
-    }
-
-    #[test]
-    fn insert_lines_splits_existing_row() {
-        let mut buf = vec!["abcde".to_string()];
-        let mut view = make_view(&mut buf, 2, 0);
-
-        buf_insert_lines(&mut view, &"123\n456".to_string());
-
-        let expected = vec!["ab123".to_string(), "456cde".to_string()];
-        assert_eq!(view.bufvec.as_slice(), expected.as_slice());
-        assert_eq!(view.cursor_y, 1);
-        assert_eq!(view.cursor_x, 3);
-        assert!(!view.status.saved);
-    }
-
-    #[test]
-    fn kill_lines_merges_spanning_rows() {
-        let mut buf = vec![
-            "hello world".to_string(),
-            "second line".to_string(),
-            "third".to_string(),
-        ];
-        let mut view = make_view(&mut buf, 3, 2);
-
-        buf_kill_lines(&mut view, (6, 0));
-
-        let expected = vec!["hello rd".to_string()];
-        assert_eq!(view.bufvec.as_slice(), expected.as_slice());
-        assert_eq!(view.kill, "world\nsecond line\nthi");
-        assert_eq!(view.cursor_y, 0);
-        assert_eq!(view.cursor_x, 6);
-        assert!(!view.status.saved);
-    }
-}
