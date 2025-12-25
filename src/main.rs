@@ -255,7 +255,12 @@ fn key(k: Key, view: &mut View) {
                 if view.cursor_y + 1 < view.bufvec.len() {
                     view.cursor_y += 1;
                     let len = view.bufvec[view.cursor_y].len();
-                    view.cursor_x = view.cursor_x.min(len);
+                    if view.cursor_x == view.bufvec[view.cursor_y.saturating_sub(1)].len() {
+                        view.cursor_x = len;
+
+                    } else {
+                        view.cursor_x = view.cursor_x.min(len);
+                    }
                 }
             }
 
@@ -264,7 +269,11 @@ fn key(k: Key, view: &mut View) {
                 if view.cursor_y > 0 {
                     view.cursor_y -= 1;
                     let len = view.bufvec[view.cursor_y].len();
-                    view.cursor_x = view.cursor_x.min(len);
+                    if view.cursor_x == view.bufvec[(view.cursor_y+1).min(view.bufvec.len()-1)].len() {
+                        view.cursor_x = len;
+                    } else {
+                        view.cursor_x = view.cursor_x.min(len);
+                    }
                 }
             }
 
