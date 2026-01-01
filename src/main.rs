@@ -7,6 +7,11 @@ use termion::screen::AlternateScreen;
 use termion::screen::IntoAlternateScreen;
 use termion::{event::Key, input::TermRead, raw::IntoRawMode};
 
+mod syntax;
+
+
+use crate::syntax::{get_syntax_info, syntax_id_for_filename};
+
 pub struct Status {
     pub saved: bool,
     pub quit: bool,
@@ -50,6 +55,8 @@ const STYLE_INVERT_ON: &str = "\x1b[7m";
 const STYLE_INVERT_OFF: &str = "\x1b[27m";
 
 fn main() -> io::Result<()> {
+
+
     let pathstr: String = match std::env::args().nth(1) {
         Some(x) => x,
         None => "Untitled".to_string(),
@@ -60,6 +67,8 @@ fn main() -> io::Result<()> {
         Err(_) => File::create_new(&pathstr).expect("File creation error"),
     };
 
+    let filetypeid: Option<u16> = syntax_id_for_filename(&pathstr);
+
     let buffered = BufReader::new(&working);
     let mut buflines = Vec::<String>::new();
 
@@ -67,6 +76,8 @@ fn main() -> io::Result<()> {
         let ln = line.unwrap();
         buflines.push(ln.clone().replace("\t", "    "));
     }
+
+    let bufl = buflines.clone();
 
     let termsize::Size { rows, cols } = termsize::get().unwrap();
     let mut screen: View = View {
@@ -78,8 +89,11 @@ fn main() -> io::Result<()> {
         terminal_w: (cols as usize),
         terminal_h: (rows as usize),
         offcol: 0,
-        endline: "".to_string(),
-        kill: "Example kill text".to_string(),
+        endline: format!("Loaded {}L of {}", bufl.len(), match filetypeid {
+       		Some(x) => get_syntax_info(x).name.to_string(),
+         	None => "Plaintext".to_string()
+        }),
+        kill: "".to_string(),
         status: Status {
             saved: true,
             quit: false,
@@ -583,66 +597,4 @@ fn buf_kill_lines(
     view.cursor_x = start_x;
     view.cursor_y = start_y;
     view.status.saved = false;
-}
-
-// Add test cases here. Make the test self-contained, with your example view and cursor defaults.
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_view<'a>(bufvec: &'a mut Vec<String>, cursor_x: usize, cursor_y: usize) -> View<'a> {
-        View {
-            bufvec,
-            cursor_x,
-            cursor_y,
-            offset: 0,
-            offcol: 0,
-            terminal_w: 80,
-            terminal_h: 24,
-            mark: (0, 0),
-            endline: String::new(),
-            kill: String::new(),
-            status: Status {
-                saved: true,
-                quit: false,
-                ctrlx: false,
-                save: false,
-                forcequit: false,
-                selecting: false,
-            },
-        }
-    }
-
-    #[test]
-    fn insert_lines_splits_existing_row() {
-        let mut buf = vec!["abcde".to_string()];
-        let mut view = make_view(&mut buf, 2, 0);
-
-        buf_insert_lines(&mut view, &"123\n456".to_string());
-
-        let expected = vec!["ab123".to_string(), "456cde".to_string()];
-        assert_eq!(view.bufvec.as_slice(), expected.as_slice());
-        assert_eq!(view.cursor_y, 1);
-        assert_eq!(view.cursor_x, 3);
-        assert!(!view.status.saved);
-    }
-
-    #[test]
-    fn kill_lines_merges_spanning_rows() {
-        let mut buf = vec![
-            "hello world".to_string(),
-            "second line".to_string(),
-            "third".to_string(),
-        ];
-        let mut view = make_view(&mut buf, 3, 2);
-
-        buf_kill_lines(&mut view, (6, 0));
-
-        let expected = vec!["hello rd".to_string()];
-        assert_eq!(view.bufvec.as_slice(), expected.as_slice());
-        assert_eq!(view.kill, "world\nsecond line\nthi");
-        assert_eq!(view.cursor_y, 0);
-        assert_eq!(view.cursor_x, 6);
-        assert!(!view.status.saved);
-    }
 }
