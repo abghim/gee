@@ -360,6 +360,30 @@ fn key(k: Key, view: &mut View) {
                 view.status.selecting = false;
             }
 
+            Key::Ctrl('d') => {
+                let line = &view.bufvec[view.cursor_y];
+                let bytes = line.as_bytes();
+                let len = bytes.len();
+                let can_jump4 = bytes
+                    .get(view.cursor_x..view.cursor_x + 4)
+                    .is_some_and(|s| s.len() == 4 && s.iter().all(|&b| b == b' '));
+
+                if view.cursor_x < len {
+                    let moves = if can_jump4 { 4 } else { 1 };
+                    for _ in 0..moves {
+                        if view.cursor_x < view.bufvec[view.cursor_y].len() {
+                            view.bufvec[view.cursor_y].remove(view.cursor_x);
+                        }
+                    }
+                } else if view.cursor_y + 1 < view.bufvec.len() {
+                    let next = view.bufvec.remove(view.cursor_y + 1);
+                    view.bufvec[view.cursor_y].push_str(&next);
+                }
+
+                view.status.saved = false;
+                view.status.selecting = false;
+            }
+
             Key::Null | Key::Ctrl(' ') => {
                 view.mark = view.trueloc();
                 view.status.selecting = true;
@@ -370,10 +394,17 @@ fn key(k: Key, view: &mut View) {
                     buf_kill_lines(view, view.mark);
                     view.status.selecting = false;
                 }
+                view.status.saved = false;
             }
 
             Key::Ctrl('y') => {
                 buf_insert_lines(view, &view.kill.clone());
+                view.status.saved = false;
+            }
+
+            Key::Ctrl('k') => {
+                buf_kill_lines(view, (view.bufvec[view.cursor_y].len(), view.cursor_y));
+                view.status.saved = false;
             }
 
             Key::Char('\n') | Key::Char('\r') => {

@@ -9075,7 +9075,7 @@ pub mod source_php {
 pub static SYNTAXES: &[SyntaxInfo] = &[
 	SyntaxInfo { name: r#"Makefile"#, scope: r#"source.makefile"#, extensions: &[r#"make"#, r#"GNUmakefile"#, r#"makefile"#, r#"Makefile"#, r#"OCamlMakefile"#, r#"mak"#, r#"mk"#] },
 	SyntaxInfo { name: r#"HTMLASP"#, scope: r#"text.html.asp"#, extensions: &[r#"asp"#] },
-	SyntaxInfo { name: r#"Cpp"#, scope: r#"source.c++"#, extensions: &[r#"cpp"#, r#"cc"#, r#"cp"#, r#"cxx"#, r#"c++"#, r#"C"#, r#"h"#, r#"hh"#, r#"hpp"#, r#"hxx"#, r#"h++"#, r#"inl"#, r#"ipp"#] },
+	SyntaxInfo { name: r#"Cpp"#, scope: r#"source.c++"#, extensions: &[r#"cpp"#, r#"cc"#, r#"cp"#, r#"cxx"#, r#"c++"#, r#"h"#, r#"hh"#, r#"hpp"#, r#"hxx"#, r#"h++"#, r#"inl"#, r#"ipp"#] },
 	SyntaxInfo { name: r#"SQL"#, scope: r#"source.sql"#, extensions: &[r#"sql"#, r#"ddl"#, r#"dml"#] },
 	SyntaxInfo { name: r#"Ruby"#, scope: r#"source.ruby"#, extensions: &[r#"rb"#, r#"Appfile"#, r#"Appraisals"#, r#"Berksfile"#, r#"Brewfile"#, r#"capfile"#, r#"cgi"#, r#"Cheffile"#, r#"config.ru"#, r#"Deliverfile"#, r#"Fastfile"#, r#"fcgi"#, r#"Gemfile"#, r#"gemspec"#, r#"Guardfile"#, r#"irbrc"#, r#"jbuilder"#, r#"podspec"#, r#"prawn"#, r#"rabl"#, r#"rake"#, r#"Rakefile"#, r#"Rantfile"#, r#"rbx"#, r#"rjs"#, r#"ruby.rail"#, r#"Scanfile"#, r#"simplecov"#, r#"Snapfile"#, r#"thor"#, r#"Thorfile"#, r#"Vagrantfile"#] },
 	SyntaxInfo { name: r#"OCaml"#, scope: r#"source.ocaml"#, extensions: &[r#"ml"#, r#"mli"#] },
