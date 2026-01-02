@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "gee"
+name = "gee-editor"
 version = "0.1.0"
 dependencies = [
  "termion",

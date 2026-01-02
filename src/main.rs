@@ -60,12 +60,22 @@ impl<'a> View<'a> {
     }
 
     fn applicable(&self, context: &ContextReference) -> Vec<_Match> {
+        let mut seen_prototypes = HashSet::<ContextReference>::new();
+        self.applicable_inner(context, &mut seen_prototypes)
+    }
+
+    fn applicable_inner(
+        &self,
+        context: &ContextReference,
+        seen_prototypes: &mut HashSet<ContextReference>,
+    ) -> Vec<_Match> {
         let info: ContextInfo = get_context(*context);
         let mut result = Vec::<_Match>::new();
         if info.meta_include_prototype {
             if let Some(prototype) = syntax_main_and_prototype(context.0).1 {
-                if context.1 != prototype {
-                    result.append(&mut self.applicable(&ContextReference(context.0, prototype)));
+                let proto_ref = ContextReference(context.0, prototype);
+                if context.1 != prototype && seen_prototypes.insert(proto_ref) {
+                    result.append(&mut self.applicable_inner(&proto_ref, seen_prototypes));
                 }
             }
         }
@@ -73,7 +83,7 @@ impl<'a> View<'a> {
         for rule in info.rules.iter() {
             match rule {
                 Rule::Include(c) => {
-                    result.append(&mut self.applicable(c));
+                    result.append(&mut self.applicable_inner(c, seen_prototypes));
                 }
 
                 Rule::Match(m) => {
