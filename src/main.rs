@@ -1,17 +1,21 @@
 #![allow(dead_code)]
 #![allow(unused)]
 
+use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Error, Write};
 use termion::screen::AlternateScreen;
 use termion::screen::IntoAlternateScreen;
 use termion::{event::Key, input::TermRead, raw::IntoRawMode};
 
-mod syntax;
 mod stack;
+mod syntax;
 
-use crate::syntax::{get_context, get_syntax_info, syntax_id_for_filename, ContextInfo, ContextReference, Rule, _Match};
 use crate::stack::*;
+use crate::syntax::{
+    get_context, get_syntax_info, syntax_id_for_filename, ContextInfo, ContextReference, Rule,
+    _Match, syntax_main_and_prototype,
+};
 
 pub struct Status {
     pub saved: bool,
@@ -40,56 +44,53 @@ pub struct View<'a> {
     pub status: Status,
 }
 
-
-
 /*
  * todo: (1) in main.py expand all variables
  * 		(2) add prototype auto-inclusion
  */
 
-fn applicable(context: &ContextReference) -> Vec<_Match> {
-	let info: ContextInfo = get_context(*context);
-	let mut result = Vec::<_Match>::new();
-	for rule in info.rules.iter() {
-		match rule {
-			Rule::Include(c) => {
-				result.append(&mut applicable(c));
-			}
-
-			Rule::Match(m) => {
-				result.push(m.clone());
-			}
-		}
-	}
-
-	if info.meta_include_prototype {
-
-	}
-
-	result.clone()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-	#[test]
-	fn apptest() {
-		print!("{:?}", applicable(&ContextReference(syntax::C::id, syntax::C::Context::main as u16)));
-	}
 }
-
 
 impl<'a> View<'a> {
     fn trueloc(self: &Self) -> (usize, usize) {
         (self.cursor_x, self.cursor_y)
     }
 
-	fn highlight_line(self: &mut Self, line: usize, begin_frame: usize) -> String {
-		if let Some(g) = self.syntax {
-			let rules = applicable(&self.stack.top(begin_frame).unwrap());
-		} "not done".to_string()
-	}
+    fn applicable(&self, context: &ContextReference) -> Vec<_Match> {
+        let info: ContextInfo = get_context(*context);
+        let mut result = Vec::<_Match>::new();
+        if info.meta_include_prototype {
+            if let Some(prototype) = syntax_main_and_prototype(context.0).1 {
+                if context.1 != prototype {
+                    result.append(&mut self.applicable(&ContextReference(context.0, prototype)));
+                }
+            }
+        }
+
+        for rule in info.rules.iter() {
+            match rule {
+                Rule::Include(c) => {
+                    result.append(&mut self.applicable(c));
+                }
+
+                Rule::Match(m) => {
+                    result.push(m.clone());
+                }
+            }
+        }
+
+        result
+    }
+
+    fn highlight_line(self: &mut Self, line: usize, begin_frame: usize) -> String {
+        if let Some(g) = self.syntax {
+            let rules = self.applicable(&self.stack.top(begin_frame).unwrap());
+        }
+        "not done".to_string()
+    }
 }
 
 const ESC: &str = "\x1b";
@@ -106,10 +107,6 @@ const STYLE_INVERT_ON: &str = "\x1b[7m";
 const STYLE_INVERT_OFF: &str = "\x1b[27m";
 
 fn main() -> io::Result<()> {
-	print!("{:?}\n\n", applicable(&ContextReference(syntax::C::id, syntax::C::Context::main as u16)));
-	print!("{:?}", applicable(&ContextReference(syntax::Rust::id, syntax::Rust::Context::impl_identifier as u16)));
-
-
     let pathstr: String = match std::env::args().nth(1) {
         Some(x) => x,
         None => "Untitled".to_string(),
@@ -149,10 +146,14 @@ fn main() -> io::Result<()> {
         terminal_w: (cols as usize),
         terminal_h: (rows as usize),
         offcol: 0,
-        endline: format!("Loaded {}L of {}", bufl.len(), match filetypeid {
-       		Some(x) => get_syntax_info(x).name.to_string(),
-         	None => "Plaintext".to_string()
-        }),
+        endline: format!(
+            "Loaded {}L of {}",
+            bufl.len(),
+            match filetypeid {
+                Some(x) => get_syntax_info(x).name.to_string(),
+                None => "Plaintext".to_string(),
+            }
+        ),
         kill: "".to_string(),
         status: Status {
             saved: true,
@@ -164,9 +165,30 @@ fn main() -> io::Result<()> {
         },
     };
 
+    print!(
+        "{:?}\n\n",
+        screen.applicable(&ContextReference(
+            syntax::C::id,
+            syntax::C::Context::main as u16
+        ))
+    );
+    print!(
+        "{:?}",
+        screen.applicable(&ContextReference(
+            syntax::Rust::id,
+            syntax::Rust::Context::main as u16
+        ))
+    );
+
     if let Some(k) = screen.syntax {
-    	screen.stack.push(ContextReference(k, 0), screen.stack.empty());
+        let mainctx = screen.stack.push(
+            ContextReference(k, syntax_main_and_prototype(k).0),
+            screen.stack.empty(),
+        );
+        screen.hlcache[0] = mainctx;
     }
+
+    print!("{:?}", screen.stack.top(screen.hlcache[0]));
 
     let stdin = std::io::stdin();
     let stdout = io::stdout().into_raw_mode()?.into_alternate_screen()?;
@@ -338,7 +360,6 @@ fn key(k: Key, view: &mut View) {
                     let len = view.bufvec[view.cursor_y].len();
                     if view.cursor_x == view.bufvec[view.cursor_y.saturating_sub(1)].len() {
                         view.cursor_x = len;
-
                     } else {
                         view.cursor_x = view.cursor_x.min(len);
                     }
@@ -350,7 +371,9 @@ fn key(k: Key, view: &mut View) {
                 if view.cursor_y > 0 {
                     view.cursor_y -= 1;
                     let len = view.bufvec[view.cursor_y].len();
-                    if view.cursor_x == view.bufvec[(view.cursor_y+1).min(view.bufvec.len()-1)].len() {
+                    if view.cursor_x
+                        == view.bufvec[(view.cursor_y + 1).min(view.bufvec.len() - 1)].len()
+                    {
                         view.cursor_x = len;
                     } else {
                         view.cursor_x = view.cursor_x.min(len);
