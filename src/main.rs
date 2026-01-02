@@ -8,9 +8,10 @@ use termion::screen::IntoAlternateScreen;
 use termion::{event::Key, input::TermRead, raw::IntoRawMode};
 
 mod syntax;
+mod stack;
 
-
-use crate::syntax::{get_syntax_info, syntax_id_for_filename};
+use crate::syntax::{get_context, get_syntax_info, syntax_id_for_filename, ContextInfo, ContextReference, Rule, _Match};
+use crate::stack::*;
 
 pub struct Status {
     pub saved: bool,
@@ -23,6 +24,10 @@ pub struct Status {
 
 pub struct View<'a> {
     pub bufvec: &'a mut Vec<String>,
+    pub hlcache: &'a mut Vec<usize>,
+    pub stack: &'a mut Stack,
+    pub syntax: Option<u16>,
+    pub recompute: usize,
     pub cursor_x: usize,
     pub cursor_y: usize,
     pub offset: usize,
@@ -35,10 +40,56 @@ pub struct View<'a> {
     pub status: Status,
 }
 
+
+
+/*
+ * todo: (1) in main.py expand all variables
+ * 		(2) add prototype auto-inclusion
+ */
+
+fn applicable(context: &ContextReference) -> Vec<_Match> {
+	let info: ContextInfo = get_context(*context);
+	let mut result = Vec::<_Match>::new();
+	for rule in info.rules.iter() {
+		match rule {
+			Rule::Include(c) => {
+				result.append(&mut applicable(c));
+			}
+
+			Rule::Match(m) => {
+				result.push(m.clone());
+			}
+		}
+	}
+
+	if info.meta_include_prototype {
+
+	}
+
+	result.clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+	#[test]
+	fn apptest() {
+		print!("{:?}", applicable(&ContextReference(syntax::C::id, syntax::C::Context::main as u16)));
+	}
+}
+
+
 impl<'a> View<'a> {
     fn trueloc(self: &Self) -> (usize, usize) {
         (self.cursor_x, self.cursor_y)
     }
+
+	fn highlight_line(self: &mut Self, line: usize, begin_frame: usize) -> String {
+		if let Some(g) = self.syntax {
+			let rules = applicable(&self.stack.top(begin_frame).unwrap());
+		} "not done".to_string()
+	}
 }
 
 const ESC: &str = "\x1b";
@@ -55,6 +106,8 @@ const STYLE_INVERT_ON: &str = "\x1b[7m";
 const STYLE_INVERT_OFF: &str = "\x1b[27m";
 
 fn main() -> io::Result<()> {
+	print!("{:?}\n\n", applicable(&ContextReference(syntax::C::id, syntax::C::Context::main as u16)));
+	print!("{:?}", applicable(&ContextReference(syntax::Rust::id, syntax::Rust::Context::impl_identifier as u16)));
 
 
     let pathstr: String = match std::env::args().nth(1) {
@@ -80,8 +133,15 @@ fn main() -> io::Result<()> {
     let bufl = buflines.clone();
 
     let termsize::Size { rows, cols } = termsize::get().unwrap();
+    let mut stack = Stack::new();
+    let mut hlcache: Vec<usize> = vec![stack.empty(); buflines.len()];
+
     let mut screen: View = View {
         bufvec: &mut buflines,
+        hlcache: &mut hlcache,
+        stack: &mut stack,
+        syntax: filetypeid,
+        recompute: 0,
         cursor_x: 0,
         cursor_y: 0,
         offset: 0,
@@ -103,6 +163,10 @@ fn main() -> io::Result<()> {
             selecting: false,
         },
     };
+
+    if let Some(k) = screen.syntax {
+    	screen.stack.push(ContextReference(k, 0), screen.stack.empty());
+    }
 
     let stdin = std::io::stdin();
     let stdout = io::stdout().into_raw_mode()?.into_alternate_screen()?;
@@ -242,6 +306,9 @@ fn key(k: Key, view: &mut View) {
         view.cursor_y = 0;
         view.offset = 0;
         view.offcol = 0;
+        view.hlcache.clear();
+        view.hlcache.push(view.stack.empty());
+        view.recompute = 0;
     }
 
     if view.cursor_y >= view.bufvec.len() {
@@ -349,11 +416,15 @@ fn key(k: Key, view: &mut View) {
                         line.remove(view.cursor_x - 1);
                         view.cursor_x -= 1;
                     }
+                    mark_recompute(view, view.cursor_y);
                 } else if view.cursor_y > 0 {
+                    let remove_idx = view.cursor_y;
                     let cur = view.bufvec.remove(view.cursor_y);
                     view.cursor_y -= 1;
                     view.cursor_x = view.bufvec[view.cursor_y].len();
                     view.bufvec[view.cursor_y].push_str(&cur);
+                    remove_cache_lines(view, remove_idx, 1);
+                    mark_recompute(view, view.cursor_y);
                 }
 
                 view.status.saved = false;
@@ -375,9 +446,13 @@ fn key(k: Key, view: &mut View) {
                             view.bufvec[view.cursor_y].remove(view.cursor_x);
                         }
                     }
+                    mark_recompute(view, view.cursor_y);
                 } else if view.cursor_y + 1 < view.bufvec.len() {
-                    let next = view.bufvec.remove(view.cursor_y + 1);
+                    let remove_idx = view.cursor_y + 1;
+                    let next = view.bufvec.remove(remove_idx);
                     view.bufvec[view.cursor_y].push_str(&next);
+                    remove_cache_lines(view, remove_idx, 1);
+                    mark_recompute(view, view.cursor_y);
                 }
 
                 view.status.saved = false;
@@ -408,10 +483,12 @@ fn key(k: Key, view: &mut View) {
             }
 
             Key::Char('\n') | Key::Char('\r') => {
+                let start_y = view.cursor_y;
                 let cur_line = view.bufvec[view.cursor_y].clone();
                 let (left, right) = cur_line.split_at(view.cursor_x);
                 view.bufvec[view.cursor_y] = left.to_string();
                 view.bufvec.insert(view.cursor_y + 1, right.to_string());
+                insert_cache_lines(view, start_y + 1, 1);
                 view.cursor_y += 1;
 
                 // Count leading indent in groups of 4 spaces (from the left part)
@@ -434,6 +511,8 @@ fn key(k: Key, view: &mut View) {
                         view.cursor_y + 1,
                         format!("{}{}", base_indent, right.trim_start()),
                     );
+                    insert_cache_lines(view, view.cursor_y + 1, 1);
+                    mark_recompute(view, start_y);
 
                     view.status.saved = false;
                     view.status.selecting = false;
@@ -442,6 +521,7 @@ fn key(k: Key, view: &mut View) {
 
                 view.bufvec[view.cursor_y].insert_str(0, &" ".repeat(base));
                 view.cursor_x = base;
+                mark_recompute(view, start_y);
 
                 view.status.saved = false;
                 view.status.selecting = false;
@@ -452,6 +532,7 @@ fn key(k: Key, view: &mut View) {
                     view.bufvec[view.cursor_y].insert(view.cursor_x, ' ');
                     view.cursor_x += 1;
                 }
+                mark_recompute(view, view.cursor_y);
             }
 
             Key::Char('{') => {
@@ -459,6 +540,7 @@ fn key(k: Key, view: &mut View) {
                 view.cursor_x += 1;
                 view.status.selecting = false;
                 view.status.saved = false;
+                mark_recompute(view, view.cursor_y);
             }
 
             Key::Char(c) if !c.is_control() => {
@@ -476,6 +558,7 @@ fn key(k: Key, view: &mut View) {
                 view.cursor_x += 1;
                 view.status.saved = false;
                 view.status.selecting = false;
+                mark_recompute(view, view.cursor_y);
             }
 
             _ => {}
@@ -517,6 +600,33 @@ fn clamp(view: &mut View) {
     }
 }
 
+fn mark_recompute(view: &mut View, line: usize) {
+    if view.recompute > line {
+        view.recompute = line;
+    }
+}
+
+fn insert_cache_lines(view: &mut View, at: usize, count: usize) {
+    if count == 0 {
+        return;
+    }
+    let fill = view.stack.empty();
+    let at = at.min(view.hlcache.len());
+    view.hlcache
+        .splice(at..at, std::iter::repeat(fill).take(count));
+}
+
+fn remove_cache_lines(view: &mut View, at: usize, count: usize) {
+    if count == 0 || view.hlcache.is_empty() {
+        return;
+    }
+    let start = at.min(view.hlcache.len());
+    let end = (start + count).min(view.hlcache.len());
+    if start < end {
+        view.hlcache.drain(start..end);
+    }
+}
+
 fn buf_insert_lines(view: &mut View, insert: &String) {
     // view.bufvec holds elements by lines. This logic can break if we are to insert a large string
     // with multiple lines. This function correctly handles multi-line-insertion by adding new rows
@@ -530,6 +640,9 @@ fn buf_insert_lines(view: &mut View, insert: &String) {
         view.bufvec.push(String::new());
         view.cursor_y = 0;
         view.cursor_x = 0;
+        if view.hlcache.is_empty() {
+            view.hlcache.push(view.stack.empty());
+        }
     }
 
     if view.cursor_y >= view.bufvec.len() {
@@ -537,10 +650,12 @@ fn buf_insert_lines(view: &mut View, insert: &String) {
     }
     view.cursor_x = view.cursor_x.min(view.bufvec[view.cursor_y].len());
 
+    let start_y = view.cursor_y;
     let parts: Vec<&str> = insert.split('\n').collect();
     if parts.len() == 1 {
         view.bufvec[view.cursor_y].insert_str(view.cursor_x, insert);
         view.cursor_x += insert.len();
+        mark_recompute(view, start_y);
         view.status.saved = false;
         return;
     }
@@ -561,9 +676,11 @@ fn buf_insert_lines(view: &mut View, insert: &String) {
     for (idx, line) in new_lines.iter().enumerate().skip(1) {
         view.bufvec.insert(view.cursor_y + idx, line.clone());
     }
+    insert_cache_lines(view, start_y + 1, parts.len() - 1);
 
     view.cursor_y += parts.len() - 1;
     view.cursor_x = parts.last().unwrap().len();
+    mark_recompute(view, start_y);
     view.status.saved = false;
 }
 
@@ -602,6 +719,7 @@ fn buf_kill_lines(
         view.kill = line[start_x..end_x].to_string();
         let new_line = format!("{}{}", &line[..start_x], &line[end_x..]);
         view.bufvec[start_y] = new_line;
+        mark_recompute(view, start_y);
     } else {
         let mut killed = String::new();
         killed.push_str(&view.bufvec[start_y][start_x..]);
@@ -621,6 +739,8 @@ fn buf_kill_lines(
         for _ in 0..(end_y - start_y) {
             view.bufvec.remove(start_y + 1);
         }
+        remove_cache_lines(view, start_y + 1, end_y - start_y);
+        mark_recompute(view, start_y);
 
         view.kill = killed;
     }
