@@ -3,6 +3,8 @@ name = "gee-editor"
 version = "0.1.0"
 edition = "2024"
 target = "./target"
+description = "A compact subset editor of emacs. Syntax highlighting in progress."
+license = "WTFPL"
 
 [dependencies]
 termion = "4.0.6"
