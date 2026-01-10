@@ -615,4 +615,3 @@ fn buf_kill_lines(
     view.cursor_y = start_y;
     view.status.saved = false;
 }
-
