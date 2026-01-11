@@ -7,6 +7,7 @@ description = "A compact subset editor of emacs. Syntax highlighting in progress
 license = "WTFPL"
 
 [dependencies]
+onig = "6.5.1"
 termion = "4.0.6"
 termsize = "0.1.9"
 

@@ -13,8 +13,8 @@ mod syntax;
 
 use crate::stack::*;
 use crate::syntax::{
-    get_context, get_syntax_info, syntax_id_for_filename, ContextInfo, ContextReference, Rule,
-    _Match, syntax_main_and_prototype,
+    get_context, get_syntax_info, syntax_id_for_filename, Action, ContextInfo, ContextReference,
+    Rule, _Match, syntax_main_and_prototype,
 };
 
 pub struct Status {
@@ -45,8 +45,8 @@ pub struct View<'a> {
 }
 
 /*
- * todo: (1) in main.py expand all variables
- * 		(2) add prototype auto-inclusion
+ * todo: (1) in main.py expand all variables [v] done
+ * 		(2) add prototype auto-inclusion [v] done
  */
 
 #[cfg(test)]
@@ -60,6 +60,7 @@ impl<'a> View<'a> {
     }
 
     fn applicable(&self, context: &ContextReference) -> Vec<_Match> {
+        /* this avoids duplicates */
         let mut seen_prototypes = HashSet::<ContextReference>::new();
         self.applicable_inner(context, &mut seen_prototypes)
     }
@@ -95,11 +96,97 @@ impl<'a> View<'a> {
         result
     }
 
-    fn highlight_line(self: &mut Self, line: usize, begin_frame: usize) -> String {
+    fn highlight_line(self: &mut Self, line: usize, begin_frame: usize) -> (String, usize /* out_frame */) {
+        use onig::{Regex, SearchOptions, Region};
         if let Some(g) = self.syntax {
-            let rules = self.applicable(&self.stack.top(begin_frame).unwrap());
+            let mut out_frame = begin_frame;
+            let mut rules = self.applicable(&self.stack.top(begin_frame).unwrap());
+            let mut context = get_context(self.stack.top(begin_frame).unwrap());
+            let mut hl :Vec<((usize, usize), String)> = Vec::new();
+            let mut cursor = 0;
+            'outer: while (cursor<self.bufvec[line].len()) {
+                let mut matched = false;
+
+                rules = self.applicable(&self.stack.top(out_frame).unwrap());
+
+               context = get_context(self.stack.top(out_frame).unwrap());
+                'inner: for rule in rules.iter() {
+                    let regex = Regex::new(&rule.pattern);
+                    let mut region = Region::new();
+                    if let Some(len) = regex.unwrap().match_with_options(&self.bufvec[line], cursor, SearchOptions::SEARCH_OPTION_NONE, Some(&mut region)) {
+                        matched = true;
+                        if let Some(scope) = rule.scope {
+                            if scope.len() == 1 {
+                                hl.push(((cursor, cursor+len-1), scope[0].to_string())); 
+                            } else {
+                                for (i, group) in scope.iter().enumerate().skip(1) {
+                                    if let Some((a, b)) = region.pos(i) {
+                                        hl.push(((a, b), group.to_string()));
+                                    } /* if a group is NOT found, don't do anything */
+                                }
+                            }
+                        } else {
+                            let is_scope_boundary = matches!(
+                                rule.action,
+                                Some(Action::Pop) | Some(Action::Set(_)) | Some(Action::Push(_))
+                            );
+                            if let Some(meta_s) = context.meta_scope {
+                                hl.push(((cursor, cursor+len-1), meta_s.to_string()));
+                            } else if !is_scope_boundary {
+                                if let Some(meta_c) = context.meta_content_scope {
+                                    hl.push(((cursor, cursor+len-1), meta_c.to_string()));
+                                } else { /* nothing at all? use default syntax scope */
+                                    hl.push(((cursor, cursor+len-1), get_syntax_info(g).scope.to_string()) );
+                                }
+                            } else { /* nothing at all? use default syntax scope */
+                                hl.push(((cursor, cursor+len-1), get_syntax_info(g).scope.to_string()) );
+                            }
+                        }
+
+                        cursor += len;
+
+                        if let Some(action) = rule.action {
+                            match action {
+                                Action::Pop => {
+                                    out_frame = self.stack.pop(out_frame)
+                                }
+
+                                Action::Set(crefs) => {
+
+                                    for cref in crefs.iter() {
+                                        out_frame = self.stack.set(out_frame, *cref);
+                                    }
+                                }
+
+
+                                Action::Push(crefs) => {
+
+                                    for cref in crefs.iter() {
+                                        out_frame = self.stack.push(*cref, out_frame);
+                                    }
+
+                                }
+                            }
+                        }
+
+                        break 'inner;
+                    }
+                    
+                }
+                if !matched {
+                    if let Some(meta_s) = context.meta_scope {
+                        hl.push(((cursor, cursor), meta_s.to_string()));
+                    } else if let Some(meta_c) = context.meta_content_scope {
+                        hl.push(((cursor, cursor), meta_c.to_string()));
+                    } else { /* nothing at all? use default syntax scope */
+                        hl.push(((cursor, cursor), get_syntax_info(g).scope.to_string()) );
+                    }
+                    cursor += 1;
+                }
+            } ("".to_string(), out_frame)
+        } else {
+            ("".to_string(), 1)
         }
-        "not done".to_string()
     }
 }
 
