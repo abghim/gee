@@ -113,7 +113,12 @@ impl<'a> View<'a> {
                 'inner: for rule in rules.iter() {
                     let regex = Regex::new(&rule.pattern);
                     let mut region = Region::new();
-                    if let Some(len) = regex.unwrap().match_with_options(&self.bufvec[line], cursor, SearchOptions::SEARCH_OPTION_NONE, Some(&mut region)) {
+                    if let Some(l) = regex.unwrap().match_with_options(&self.bufvec[line], cursor, SearchOptions::SEARCH_OPTION_NONE, Some(&mut region)) {
+                        let mut len = l;
+
+                        if l ==0 {
+                            len = 1;
+                        }
                         matched = true;
                         if let Some(scope) = rule.scope {
                             if scope.len() == 1 {
