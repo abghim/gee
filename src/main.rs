@@ -312,6 +312,10 @@ fn main() -> io::Result<()> {
     for k in stdin.keys() {
         let k = k?;
         key(k, &mut screen);
+       	let termsize::Size { rows, cols } = termsize::get().unwrap();
+        screen.terminal_w = cols as usize;
+        screen.terminal_h = rows as usize;
+
 
         clamp(&mut screen);
 
