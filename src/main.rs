@@ -1,9 +1,10 @@
 #![allow(dead_code)]
 #![allow(unused)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, Error, Write};
+use onig::Regex;
 use termion::screen::AlternateScreen;
 use termion::screen::IntoAlternateScreen;
 use termion::{event::Key, input::TermRead, raw::IntoRawMode};
@@ -29,6 +30,7 @@ pub struct Status {
 pub struct View<'a> {
 	pub bufvec: &'a mut Vec<String>,
 	pub hlcache: &'a mut Vec<usize>,
+	pub regex_cache: &'a mut HashMap<&'static str, Regex>,
 	pub stack: &'a mut Stack,
 	pub syntax: Option<u16>,
 	pub recompute: usize,
@@ -101,7 +103,7 @@ impl<'a> View<'a> {
 		line: usize,
 		begin_frame: usize,
 	) -> (Vec<((usize, usize), String)>, usize /* out_frame */) {
-		use onig::{Regex, Region, SearchOptions};
+		use onig::{Region, SearchOptions};
 		if let Some(g) = self.syntax {
 			let real_line = &self.bufvec[line];
 			let parse_line = format!("{real_line}\n");
@@ -118,9 +120,12 @@ impl<'a> View<'a> {
 
 				context = get_context(self.stack.top(out_frame).unwrap());
 				'inner: for rule in rules.iter() {
-					let regex = Regex::new(&rule.pattern);
+					let regex = self
+						.regex_cache
+						.entry(rule.pattern)
+						.or_insert_with(|| Regex::new(rule.pattern).unwrap());
 					let mut region = Region::new();
-					if let Some(l) = regex.unwrap().match_with_options(
+					if let Some(l) = regex.match_with_options(
 						&parse_line,
 						cursor,
 						SearchOptions::SEARCH_OPTION_NONE,
@@ -220,9 +225,12 @@ impl<'a> View<'a> {
 				rules = self.applicable(&self.stack.top(out_frame).unwrap());
 
 				for rule in rules.iter() {
-					let regex = Regex::new(&rule.pattern);
+					let regex = self
+						.regex_cache
+						.entry(rule.pattern)
+						.or_insert_with(|| Regex::new(rule.pattern).unwrap());
 					let mut region = Region::new();
-					if let Some(len) = regex.unwrap().match_with_options(
+					if let Some(len) = regex.match_with_options(
 						&parse_line,
 						real_len,
 						SearchOptions::SEARCH_OPTION_NONE,
@@ -304,10 +312,12 @@ fn main() -> io::Result<()> {
 	let termsize::Size { rows, cols } = termsize::get().unwrap();
 	let mut stack = Stack::new();
 	let mut hlcache: Vec<usize> = vec![stack.empty(); buflines.len()];
+	let mut regex_cache: HashMap<&'static str, Regex> = HashMap::new();
 
 	let mut screen: View = View {
 		bufvec: &mut buflines,
 		hlcache: &mut hlcache,
+		regex_cache: &mut regex_cache,
 		stack: &mut stack,
 		syntax: filetypeid,
 		recompute: 0,
@@ -337,9 +347,10 @@ fn main() -> io::Result<()> {
 		},
 	};
 
-	reparse_dirty(&mut screen);
+	clamp(&mut screen);
+	let initial_scope = reparse_dirty(&mut screen);
 	let initial_status = screen.endline.clone();
-	update_scope_status(&mut screen, Some(initial_status));
+	update_scope_status(&mut screen, Some(initial_status), initial_scope);
 
 	let stdin = std::io::stdin();
 	let stdout = io::stdout().into_raw_mode()?.into_alternate_screen()?;
@@ -354,9 +365,8 @@ fn main() -> io::Result<()> {
 		screen.terminal_w = cols as usize;
 		screen.terminal_h = rows as usize;
 
-		reparse_dirty(&mut screen);
-
 		clamp(&mut screen);
+		let current_scope = reparse_dirty(&mut screen);
 
 		let mut status_message = if screen.status.selecting {
 			Some("Selecting".to_string())
@@ -387,7 +397,7 @@ fn main() -> io::Result<()> {
 				screen.status.quit = false;
 			}
 		}
-		update_scope_status(&mut screen, status_message);
+		update_scope_status(&mut screen, status_message, current_scope);
 		clamp(&mut screen);
 		frame(&mut screen_out, &screen);
 	}
@@ -672,7 +682,6 @@ fn key(k: Key, view: &mut View) {
 				insert_cache_lines(view, start_y + 1, 1);
 				view.cursor_y += 1;
 
-				// Count leading indent in groups of 4 spaces (from the left part)
 				let indent_levels = left
 					.as_bytes()
 					.chunks(4)
@@ -818,6 +827,26 @@ fn main_frame(view: &mut View) -> usize {
 	}
 }
 
+fn default_scope(view: &View) -> String {
+	view.syntax
+		.map(|id| get_syntax_info(id).scope.to_string())
+		.unwrap_or_else(|| "text.plain".to_string())
+}
+
+fn scope_from_runs(
+	scopes: &[((usize, usize), String)],
+	cursor: usize,
+	default_scope: String,
+) -> String {
+	for ((start, end), scope) in scopes.iter().rev() {
+		if *start <= cursor && cursor <= *end {
+			return scope.clone();
+		}
+	}
+
+	default_scope
+}
+
 fn ensure_cache(view: &mut View) {
 	let target_len = view.bufvec.len().max(1);
 	let fill = view.stack.empty();
@@ -834,46 +863,66 @@ fn ensure_cache(view: &mut View) {
 	}
 }
 
-fn reparse_dirty(view: &mut View) {
+fn reparse_dirty(view: &mut View) -> String {
 	if view.bufvec.is_empty() {
 		view.hlcache.clear();
 		view.recompute = 0;
-		return;
+		return "no scope".to_string();
 	}
 
 	if view.syntax.is_none() {
 		ensure_cache(view);
-		view.recompute = view.bufvec.len();
-		return;
+		let line = view.cursor_y.min(view.bufvec.len().saturating_sub(1));
+		view.recompute = line.saturating_add(1);
+		return default_scope(view);
 	}
 
 	ensure_cache(view);
-
-	if view.recompute >= view.bufvec.len() {
-		return;
-	}
-
-
-
 	let main = main_frame(view);
 	view.hlcache[0] = main;
+	let cursor_line = view.cursor_y.min(view.bufvec.len() - 1);
+	let margin = 8usize;
+	let text_rows = view.terminal_h.saturating_sub(1);
+	let visible_end = (view.offset + text_rows + margin).min(view.bufvec.len()).saturating_sub(1);
+	let target_end = visible_end.max(cursor_line);
+	let mut cursor_scope = default_scope(view);
+
+	if view.recompute > target_end {
+		let begin_frame = if cursor_line == 0 {
+			main
+		} else {
+			view.hlcache[cursor_line]
+		};
+		let (scopes, _) = view.highlight_line(cursor_line, begin_frame);
+		let cursor = if view.bufvec[cursor_line].is_empty() {
+			0
+		} else {
+			view.cursor_x.min(view.bufvec[cursor_line].len().saturating_sub(1))
+		};
+		return scope_from_runs(&scopes, cursor, cursor_scope);
+	}
 
 	let start = view.recompute.min(view.bufvec.len() - 1);
-	for line in start..view.bufvec.len() {
+	for line in start..=target_end {
 		let begin_frame = if line == 0 { main } else { view.hlcache[line] };
-		let (_, out_frame) = view.highlight_line(line, begin_frame);
+		let (scopes, out_frame) = view.highlight_line(line, begin_frame);
+		if line == cursor_line {
+			let cursor = if view.bufvec[line].is_empty() {
+				0
+			} else {
+				view.cursor_x.min(view.bufvec[line].len().saturating_sub(1))
+			};
+			cursor_scope = scope_from_runs(&scopes, cursor, cursor_scope);
+		}
 		if line + 1 >= view.bufvec.len() {
 			break;
 		}
 
-		let changed = view.hlcache[line + 1] != out_frame;
 		view.hlcache[line + 1] = out_frame;
-		if !changed {
-			break;
-		}
 	}
 
-	view.recompute = view.bufvec.len();
+	view.recompute = target_end.saturating_add(1);
+	cursor_scope
 }
 
 fn scope_under_cursor(view: &mut View) -> String {
@@ -906,17 +955,10 @@ fn scope_under_cursor(view: &mut View) -> String {
 	let (scopes, _) = view.highlight_line(line, begin_frame);
 	let cursor = view.cursor_x.min(line_len.saturating_sub(1));
 
-	for ((start, end), scope) in scopes.iter().rev() {
-		if *start <= cursor && cursor <= *end {
-			return scope.clone();
-		}
-	}
-
-	syntax_scope
+	scope_from_runs(&scopes, cursor, syntax_scope)
 }
 
-fn update_scope_status(view: &mut View, prefix: Option<String>) {
-	let scope = scope_under_cursor(view);
+fn update_scope_status(view: &mut View, prefix: Option<String>, scope: String) {
 	view.endline = match prefix {
 		Some(msg) if !msg.is_empty() => format!("{msg} | {scope}"),
 		_ => scope,
