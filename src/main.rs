@@ -11,6 +11,11 @@ use termion::{event::Key, input::TermRead, raw::IntoRawMode};
 
 mod stack;
 mod syntax;
+mod util;
+
+mod config;
+
+use crate::util::*;
 
 use crate::stack::*;
 use crate::syntax::{
@@ -212,7 +217,7 @@ impl<'a> View<'a> {
 					} else if let Some(meta_c) = context.meta_content_scope {
 						hl.push(((cursor, cursor), meta_c.to_string()));
 					} else {
-						/* nothing at all? use default syntax scope */
+						/* nothing at all? use default syntax scope!! */
 						hl.push(((cursor, cursor), get_syntax_info(g).scope.to_string()));
 					}
 					cursor += 1;
@@ -286,6 +291,7 @@ const STYLE_RESET: &str = "\x1b[0m";
 const STYLE_INVERT_ON: &str = "\x1b[7m";
 const STYLE_INVERT_OFF: &str = "\x1b[27m";
 
+
 fn main() -> io::Result<()> {
 	let pathstr: String = match std::env::args().nth(1) {
 		Some(x) => x,
@@ -304,7 +310,7 @@ fn main() -> io::Result<()> {
 
 	for line in buffered.lines() {
 		let ln = line.unwrap();
-		buflines.push(ln.clone().replace("\t", "	"));
+		buflines.push(ln.replace('\t', "    "));
 	}
 
 	let bufl = buflines.clone();
@@ -397,6 +403,7 @@ fn main() -> io::Result<()> {
 				screen.status.quit = false;
 			}
 		}
+		/* show in status line */
 		update_scope_status(&mut screen, status_message, current_scope);
 		clamp(&mut screen);
 		frame(&mut screen_out, &screen);
@@ -405,11 +412,18 @@ fn main() -> io::Result<()> {
 	Ok(())
 }
 
+
 fn frame<W: Write>(out: &mut W, view: &View) {
 	let mut screen: String = String::new();
 
 	screen.push_str(CURSOR_HIDE);
 	screen.push_str(&goto(1, 1));
+
+	/* using config, push default fg & bg */
+	screen.push_str(&util::hex2ascii_bg!(crate::config::BACKGROUND));
+	screen.push_str(&util::hex2ascii!(config::SOURCE));
+
+
 
 	let rrows = view.terminal_h.saturating_sub(1);
 
@@ -482,6 +496,7 @@ fn frame<W: Write>(out: &mut W, view: &View) {
 	let scr_row = view.cursor_y.saturating_sub(view.offset) + 1;
 	let scr_col = view.cursor_x.saturating_sub(view.offcol) + 1;
 	screen.push_str(&goto(scr_row as u16, scr_col as u16));
+
 
 	out.write_all(screen.as_bytes())
 		.expect("Screen render error");
@@ -972,6 +987,8 @@ fn buf_insert_lines(view: &mut View, insert: &String) {
 	// with multiple lines. This function correctly handles multi-line-insertion by adding new rows
 	// and splitting existing ones. It may be helpful to referece the 'enter' logic in key().
 	// Replace the following todo!() with your code.
+	let insert = insert.replace('\t', "    ");
+
 	if insert.is_empty() {
 		return;
 	}
@@ -993,7 +1010,7 @@ fn buf_insert_lines(view: &mut View, insert: &String) {
 	let start_y = view.cursor_y;
 	let parts: Vec<&str> = insert.split('\n').collect();
 	if parts.len() == 1 {
-		view.bufvec[view.cursor_y].insert_str(view.cursor_x, insert);
+		view.bufvec[view.cursor_y].insert_str(view.cursor_x, &insert);
 		view.cursor_x += insert.len();
 		mark_recompute(view, start_y);
 		view.status.saved = false;
@@ -1027,8 +1044,7 @@ fn buf_insert_lines(view: &mut View, insert: &String) {
 fn buf_kill_lines(
 	view: &mut View,
 	/* start deleting from current cursor (view.cursor_x, view.cursor_y) */
-	to: (usize, usize),
-) {
+	to: (usize, usize),) {
 	// view.bufvec holds elements by lines. This logic can break if we are to delete a large string
 	// with multiple lines. This function correctly handles multi-line-deletion by purging unused
 	// lines and merging remaining ones. It may be helpful to referece the 'backspace' logic in key().
