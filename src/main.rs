@@ -12,7 +12,6 @@ mod stack;
 mod syntax;
 
 use crate::stack::*;
-use crate::syntax::MultiMarkdown::Context;
 use crate::syntax::{
 	get_context, get_syntax_info, syntax_id_for_filename, Action, ContextInfo, ContextReference,
 	Rule, _Match, syntax_main_and_prototype,
@@ -104,12 +103,15 @@ impl<'a> View<'a> {
 	) -> (Vec<((usize, usize), String)>, usize /* out_frame */) {
 		use onig::{Regex, Region, SearchOptions};
 		if let Some(g) = self.syntax {
+			let real_line = &self.bufvec[line];
+			let parse_line = format!("{real_line}\n");
+			let real_len = real_line.len();
 			let mut out_frame = begin_frame;
 			let mut rules = self.applicable(&self.stack.top(begin_frame).unwrap());
 			let mut context = get_context(self.stack.top(begin_frame).unwrap());
 			let mut hl: Vec<((usize, usize), String)> = Vec::new();
 			let mut cursor = 0;
-			'outer: while (cursor < self.bufvec[line].len()) {
+			'outer: while (cursor < real_len) {
 				let mut matched = false;
 
 				rules = self.applicable(&self.stack.top(out_frame).unwrap());
@@ -119,60 +121,64 @@ impl<'a> View<'a> {
 					let regex = Regex::new(&rule.pattern);
 					let mut region = Region::new();
 					if let Some(l) = regex.unwrap().match_with_options(
-						&self.bufvec[line],
+						&parse_line,
 						cursor,
 						SearchOptions::SEARCH_OPTION_NONE,
 						Some(&mut region),
 					) {
-						let mut len = l;
-
-						if l == 0 {
-							len = 1; // avoid infinite cursor hang (advance by at least 1)
-						}
+						let len = l;
 						matched = true;
-						if let Some(scope) = rule.scope {
-							if scope.len() == 1 {
-								hl.push(((cursor, cursor + len - 1), scope[0].to_string()));
-							} else {
-								for (i, group) in scope.iter().enumerate().skip(1) {
-									if let Some((a, b)) = region.pos(i) {
-										hl.push(((a, b), group.to_string()));
-									} /* if a group is NOT found, don't do anything */
+						if len > 0 {
+							if let Some(scope) = rule.scope {
+								if scope.len() == 1 {
+									hl.push(((cursor, cursor + len - 1), scope[0].to_string()));
+								} else {
+									for (i, group) in scope.iter().enumerate().skip(1) {
+										if let Some((a, b)) = region.pos(i) {
+											if a < real_len {
+												hl.push((
+													(a, b.min(real_len.saturating_sub(1))),
+													group.to_string(),
+												));
+											}
+										} /* if a group is NOT found, don't do anything */
+									}
 								}
-							}
-						} else {
-							let is_scope_boundary = matches!(
-								rule.action,
-								Some(Action::Pop) | Some(Action::Set(_)) | Some(Action::Push(_))
-							);
-							if let Some(meta_s) = context.meta_scope {
-								hl.push(((cursor, cursor + len - 1), meta_s.to_string()));
-							} else if !is_scope_boundary {
-								if let Some(meta_c) = context.meta_content_scope {
-									hl.push(((cursor, cursor + len - 1), meta_c.to_string()));
+							} else {
+								let is_scope_boundary = matches!(
+									rule.action,
+									Some(Action::Pop) | Some(Action::Set(_)) | Some(Action::Push(_))
+								);
+								if let Some(meta_s) = context.meta_scope {
+									hl.push(((cursor, cursor + len - 1), meta_s.to_string()));
+								} else if !is_scope_boundary {
+									if let Some(meta_c) = context.meta_content_scope {
+										hl.push(((cursor, cursor + len - 1), meta_c.to_string()));
+									} else {
+										hl.push((
+											(cursor, cursor + len - 1),
+											get_syntax_info(g).scope.to_string(),
+										));
+									}
 								} else {
 									hl.push((
 										(cursor, cursor + len - 1),
 										get_syntax_info(g).scope.to_string(),
 									));
 								}
-							} else {
-								hl.push((
-									(cursor, cursor + len - 1),
-									get_syntax_info(g).scope.to_string(),
-								));
 							}
 						}
 
-						cursor += len;
+						let frame_before = out_frame;
 
 						if let Some(action) = rule.action {
 							match action {
 								Action::Pop => out_frame = self.stack.pop(out_frame),
 
 								Action::Set(crefs) => {
+									out_frame = self.stack.pop(out_frame);
 									for cref in crefs.iter() {
-										out_frame = self.stack.set(out_frame, *cref);
+										out_frame = self.stack.push(*cref, out_frame);
 									}
 								}
 
@@ -182,6 +188,14 @@ impl<'a> View<'a> {
 									}
 								}
 							}
+						}
+
+						if len == 0 {
+							if out_frame == frame_before {
+								cursor += 1;
+							}
+						} else {
+							cursor += len;
 						}
 
 						break 'inner;
@@ -198,6 +212,51 @@ impl<'a> View<'a> {
 					}
 					cursor += 1;
 				}
+			}
+
+			let mut eol_steps = 0usize;
+			while eol_steps < 32 {
+				let mut changed = false;
+				rules = self.applicable(&self.stack.top(out_frame).unwrap());
+
+				for rule in rules.iter() {
+					let regex = Regex::new(&rule.pattern);
+					let mut region = Region::new();
+					if let Some(len) = regex.unwrap().match_with_options(
+						&parse_line,
+						real_len,
+						SearchOptions::SEARCH_OPTION_NONE,
+						Some(&mut region),
+					) {
+						let frame_before = out_frame;
+						if let Some(action) = rule.action {
+							match action {
+								Action::Pop => out_frame = self.stack.pop(out_frame),
+								Action::Set(crefs) => {
+									out_frame = self.stack.pop(out_frame);
+									for cref in crefs.iter() {
+										out_frame = self.stack.push(*cref, out_frame);
+									}
+								}
+								Action::Push(crefs) => {
+									for cref in crefs.iter() {
+										out_frame = self.stack.push(*cref, out_frame);
+									}
+								}
+							}
+						}
+
+						if out_frame != frame_before {
+							changed = true;
+							break;
+						}
+					}
+				}
+
+				if !changed {
+					break;
+				}
+				eol_steps += 1;
 			}
 			(hl, out_frame) /* moving hl */
 		} else {
@@ -278,22 +337,9 @@ fn main() -> io::Result<()> {
 		},
 	};
 
-
-	if let Some(k) = screen.syntax {
-		let mainctx = screen.stack.push(
-			ContextReference(k, syntax_main_and_prototype(k).0),
-			screen.stack.empty(),
-		);
-		screen.hlcache[0] = mainctx;
-	}
-
-
-	let lbf = screen.bufvec.len();
-	for i in 1..lbf {
-		let parsed = screen.highlight_line(i, screen.hlcache[i-1]);
-   		screen.hlcache[i] = parsed.1;
-		println!("L{} (stack #{}) :\t{:?}", i, screen.hlcache[i], parsed.0);
-	}
+	reparse_dirty(&mut screen);
+	let initial_status = screen.endline.clone();
+	update_scope_status(&mut screen, Some(initial_status));
 
 	let stdin = std::io::stdin();
 	let stdout = io::stdout().into_raw_mode()?.into_alternate_screen()?;
@@ -308,14 +354,15 @@ fn main() -> io::Result<()> {
 		screen.terminal_w = cols as usize;
 		screen.terminal_h = rows as usize;
 
+		reparse_dirty(&mut screen);
 
 		clamp(&mut screen);
 
-		if screen.status.selecting {
-			screen.endline = "Selecting ".to_string();
+		let mut status_message = if screen.status.selecting {
+			Some("Selecting".to_string())
 		} else {
-			screen.endline = "".to_string();
-		}
+			None
+		};
 
 		if screen.status.save {
 			use std::io::{Seek, SeekFrom};
@@ -328,7 +375,7 @@ fn main() -> io::Result<()> {
 			working.flush().expect("Error flushing");
 
 			screen.status.saved = true;
-			screen.endline = format!("Wrote to {}", &pathstr);
+			status_message = Some(format!("Wrote to {}", &pathstr));
 			screen.status.save = false;
 		}
 
@@ -336,10 +383,11 @@ fn main() -> io::Result<()> {
 			if screen.status.saved || screen.status.forcequit {
 				break;
 			} else {
-				screen.endline = format!("{} not saved", &pathstr);
+				status_message = Some(format!("{} not saved", &pathstr));
 				screen.status.quit = false;
 			}
 		}
+		update_scope_status(&mut screen, status_message);
 		clamp(&mut screen);
 		frame(&mut screen_out, &screen);
 	}
@@ -759,6 +807,123 @@ fn remove_cache_lines(view: &mut View, at: usize, count: usize) {
 		view.hlcache.drain(start..end);
 	}
 }
+
+fn main_frame(view: &mut View) -> usize {
+	match view.syntax {
+		Some(k) => view.stack.push(
+			ContextReference(k, syntax_main_and_prototype(k).0),
+			view.stack.empty(),
+		),
+		None => view.stack.empty(),
+	}
+}
+
+fn ensure_cache(view: &mut View) {
+	let target_len = view.bufvec.len().max(1);
+	let fill = view.stack.empty();
+	if view.hlcache.len() < target_len {
+		view.hlcache
+			.extend(std::iter::repeat(fill).take(target_len - view.hlcache.len()));
+	} else if view.hlcache.len() > target_len {
+		view.hlcache.truncate(target_len);
+	}
+
+	if !view.hlcache.is_empty() {
+		let main = main_frame(view);
+		view.hlcache[0] = main;
+	}
+}
+
+fn reparse_dirty(view: &mut View) {
+	if view.bufvec.is_empty() {
+		view.hlcache.clear();
+		view.recompute = 0;
+		return;
+	}
+
+	if view.syntax.is_none() {
+		ensure_cache(view);
+		view.recompute = view.bufvec.len();
+		return;
+	}
+
+	ensure_cache(view);
+
+	if view.recompute >= view.bufvec.len() {
+		return;
+	}
+
+
+
+	let main = main_frame(view);
+	view.hlcache[0] = main;
+
+	let start = view.recompute.min(view.bufvec.len() - 1);
+	for line in start..view.bufvec.len() {
+		let begin_frame = if line == 0 { main } else { view.hlcache[line] };
+		let (_, out_frame) = view.highlight_line(line, begin_frame);
+		if line + 1 >= view.bufvec.len() {
+			break;
+		}
+
+		let changed = view.hlcache[line + 1] != out_frame;
+		view.hlcache[line + 1] = out_frame;
+		if !changed {
+			break;
+		}
+	}
+
+	view.recompute = view.bufvec.len();
+}
+
+fn scope_under_cursor(view: &mut View) -> String {
+	if view.bufvec.is_empty() {
+		return "no scope".to_string();
+	}
+
+	reparse_dirty(view);
+
+	let line = view.cursor_y.min(view.bufvec.len() - 1);
+	let syntax_scope = view
+		.syntax
+		.map(|id| get_syntax_info(id).scope.to_string())
+		.unwrap_or_else(|| "text.plain".to_string());
+
+	if view.syntax.is_none() {
+		return syntax_scope;
+	}
+
+	let line_len = view.bufvec[line].len();
+	if line_len == 0 {
+		return syntax_scope;
+	}
+
+	let begin_frame = if line == 0 {
+		main_frame(view)
+	} else {
+		view.hlcache[line]
+	};
+	let (scopes, _) = view.highlight_line(line, begin_frame);
+	let cursor = view.cursor_x.min(line_len.saturating_sub(1));
+
+	for ((start, end), scope) in scopes.iter().rev() {
+		if *start <= cursor && cursor <= *end {
+			return scope.clone();
+		}
+	}
+
+	syntax_scope
+}
+
+fn update_scope_status(view: &mut View, prefix: Option<String>) {
+	let scope = scope_under_cursor(view);
+	view.endline = match prefix {
+		Some(msg) if !msg.is_empty() => format!("{msg} | {scope}"),
+		_ => scope,
+	};
+}
+
+
 
 fn buf_insert_lines(view: &mut View, insert: &String) {
 	// view.bufvec holds elements by lines. This logic can break if we are to insert a large string
