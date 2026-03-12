@@ -1,5 +1,16 @@
 # Gee -- Good Enough Emacs
 
+Plans (Important!)
+> ![NOTE]
+> The most actively developed feature is syntax highlighting, under the feature/hl branch. The master branch receives less frequent updates.
+
+I plan to implement the following before launching Gee 1.0
+- Undo & file backup (robust, unlimited undo tree planned for the distant future)
+- Search & replace
+
+As for syntax highlighting, I have decided to develop it in a separate branch, feature/hl. **I have decided that the gee editor itself will remain a ~500KB binary with no syntax highlighting. As soon as 1.0-level development finishes, I will fork gee to a different editor and merge syntax highlighting.**
+
+
 Emacs that's good enough. Sane defaults, including:
 - tabs are displayed as four spaces. All tabs are converted to four spaces on read & save.
 - always preserves indent
