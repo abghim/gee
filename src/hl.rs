@@ -15,10 +15,10 @@ pub fn fg_for_scope(scope: &str) -> &'static str {
 	if scope.contains("comment") {
 		&FG_COMMENT
 	} else if scope.contains("entity.name.function")
+		|| scope.contains("variable.function")
 		|| scope.contains("support.function")
 		|| scope.contains("meta.function")
 		|| scope.contains("support.macro")
-		|| scope.contains("entity.name.macro")
 	{
 		&FG_FUNC
 	} else if scope.contains("storage.type")
@@ -46,35 +46,49 @@ pub fn fg_for_scope(scope: &str) -> &'static str {
 	}
 }
 
-pub fn scope_at<'a>(runs: &'a [((usize, usize), String)], cursor: usize) -> Option<&'a str> {
-	for ((start, end), scope) in runs.iter().rev() {
-		if *start <= cursor && cursor <= *end {
-			return Some(scope.as_str());
-		}
-	}
-
-	None
-}
-
-pub fn render_line_segment(screen: &mut String, text: &str, runs: &[((usize, usize), String)], start: usize, end: usize, selected: bool) {
+pub fn render_line_segment(
+	screen: &mut String,
+	text: &str,
+	runs: &[((usize, usize), String)],
+	start: usize,
+	end: usize,
+	bg: &str,
+) {
 	if start >= end {
 		return;
 	}
 
-	let bg = if selected { &*BG_ACTIVE } else { &*BG_DEFAULT };
-	let mut current_fg = "";
+	let width = end - start;
+	let mut colors: Vec<&str> = vec![FG_SOURCE.as_str(); width];
 
 	screen.push_str(bg);
 
-	for idx in start..end {
-		let fg = scope_at(runs, idx).map(fg_for_scope).unwrap_or(&FG_SOURCE);
-		if fg != current_fg {
-			screen.push_str(fg);
-			current_fg = fg;
+	for ((run_start, run_end), scope) in runs {
+		let seg_start = (*run_start).max(start);
+		let seg_end = run_end.saturating_add(1).min(end);
+		if seg_start < seg_end {
+			let fg = fg_for_scope(scope);
+			for color in &mut colors[(seg_start - start)..(seg_end - start)] {
+				*color = fg;
+			}
 		}
-		screen.push(text.as_bytes()[idx] as char);
 	}
 
-	screen.push_str(&BG_DEFAULT);
+	let mut current_fg = colors[0];
+	let mut seg_start = start;
+	screen.push_str(current_fg);
+
+	for idx in (start + 1)..end {
+		let fg = colors[idx - start];
+		if fg != current_fg {
+			screen.push_str(&text[seg_start..idx]);
+			screen.push_str(fg);
+			current_fg = fg;
+			seg_start = idx;
+		}
+	}
+
+	screen.push_str(&text[seg_start..end]);
+	screen.push_str(bg);
 	screen.push_str(&FG_SOURCE);
 }

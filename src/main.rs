@@ -419,7 +419,13 @@ fn main() -> io::Result<()> {
 
 
 fn frame<W: Write>(out: &mut W, view: &View) {
-	let mut screen: String = String::new();
+	let mut screen: String = String::with_capacity(
+		view.terminal_w
+			.saturating_mul(view.terminal_h)
+			.saturating_mul(4)
+			.saturating_add(256),
+	);
+	let blank_row = " ".repeat(view.terminal_w);
 
 	screen.push_str(CURSOR_HIDE);
 	screen.push_str(&goto(1, 1));
@@ -455,11 +461,14 @@ fn frame<W: Write>(out: &mut W, view: &View) {
 
 	for n in 0..rrows {
 		let i: usize = n + view.offset;
+		let row_bg = if i == view.cursor_y { &*BG_ACTIVE } else { &*BG_DEFAULT };
 
 		screen.push_str(&goto((n + 1) as u16, 1));
-		screen.push_str(CLEAR_LINE);
+		screen.push_str(row_bg);
+		screen.push_str(&FG_SOURCE);
 
 		if i >= view.bufvec.len() {
+			screen.push_str(&blank_row);
 			continue;
 		}
 
@@ -471,6 +480,7 @@ fn frame<W: Write>(out: &mut W, view: &View) {
 
 		let start = view.offcol.min(line.len());
 		let end = (view.offcol + view.terminal_w).min(line.len());
+		let visible_width = end.saturating_sub(start);
 
 		if view.status.selecting
 			&& (i > sel_start_y || (i == sel_start_y && sel_start_x < line.len()))
@@ -483,21 +493,35 @@ fn frame<W: Write>(out: &mut W, view: &View) {
 			let vis_sel_end = line_sel_end.min(end);
 
 			if vis_sel_start < vis_sel_end {
-				render_line_segment(&mut screen, line, runs, start, vis_sel_start, false);
-				render_line_segment(&mut screen, line, runs, vis_sel_start, vis_sel_end, true);
-				render_line_segment(&mut screen, line, runs, vis_sel_end, end, false);
+				render_line_segment(&mut screen, line, runs, start, vis_sel_start, row_bg);
+				screen.push_str(STYLE_INVERT_ON);
+				render_line_segment(&mut screen, line, runs, vis_sel_start, vis_sel_end, row_bg);
+				screen.push_str(STYLE_INVERT_OFF);
+				screen.push_str(row_bg);
+				screen.push_str(&FG_SOURCE);
+				render_line_segment(&mut screen, line, runs, vis_sel_end, end, row_bg);
+				if visible_width < view.terminal_w {
+					screen.push_str(row_bg);
+					screen.push_str(&blank_row[..view.terminal_w - visible_width]);
+				}
 				continue;
 			}
 		}
 
-		render_line_segment(&mut screen, line, runs, start, end, false);
+		render_line_segment(&mut screen, line, runs, start, end, row_bg);
+		if visible_width < view.terminal_w {
+			screen.push_str(row_bg);
+			screen.push_str(&blank_row[..view.terminal_w - visible_width]);
+		}
 	}
 
 	screen.push_str(&goto(view.terminal_h as u16, 1));
-	screen.push_str(CLEAR_LINE);
 	screen.push_str(&BG_DEFAULT);
 	screen.push_str(&FG_SOURCE);
-	screen.push_str(&view.endline);
+	screen.push_str(&view.endline[..view.endline.len().min(view.terminal_w)]);
+	if view.endline.len() < view.terminal_w {
+		screen.push_str(&blank_row[..view.terminal_w - view.endline.len()]);
+	}
 	screen.push_str(CURSOR_SHOW);
 	let scr_row = view.cursor_y.saturating_sub(view.offset) + 1;
 	let scr_col = view.cursor_x.saturating_sub(view.offcol) + 1;
@@ -934,24 +958,22 @@ fn reparse_dirty(view: &mut View) -> String {
 			view.hlcache[cursor_line]
 		};
 		let (scopes, _) = view.highlight_line(cursor_line, begin_frame);
-		if let Some(line_runs) = view.line_hl.get_mut(cursor_line) {
-			*line_runs = scopes.clone();
-		}
 		let cursor = if view.bufvec[cursor_line].is_empty() {
 			0
 		} else {
 			view.cursor_x.min(view.bufvec[cursor_line].len().saturating_sub(1))
 		};
-		return scope_from_runs(&scopes, cursor, cursor_scope);
+		let scope = scope_from_runs(&scopes, cursor, cursor_scope);
+		if let Some(line_runs) = view.line_hl.get_mut(cursor_line) {
+			*line_runs = scopes;
+		}
+		return scope;
 	}
 
 	let start = view.recompute.min(view.bufvec.len() - 1);
 	for line in start..=target_end {
 		let begin_frame = if line == 0 { main } else { view.hlcache[line] };
 		let (scopes, out_frame) = view.highlight_line(line, begin_frame);
-		if let Some(line_runs) = view.line_hl.get_mut(line) {
-			*line_runs = scopes.clone();
-		}
 		if line == cursor_line {
 			let cursor = if view.bufvec[line].is_empty() {
 				0
@@ -959,6 +981,9 @@ fn reparse_dirty(view: &mut View) -> String {
 				view.cursor_x.min(view.bufvec[line].len().saturating_sub(1))
 			};
 			cursor_scope = scope_from_runs(&scopes, cursor, cursor_scope);
+		}
+		if let Some(line_runs) = view.line_hl.get_mut(line) {
+			*line_runs = scopes;
 		}
 		if line + 1 >= view.bufvec.len() {
 			break;
