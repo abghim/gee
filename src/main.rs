@@ -35,6 +35,7 @@ pub struct Status {
 pub struct View<'a> {
 	pub bufvec: &'a mut Vec<String>,
 	pub hlcache: &'a mut Vec<usize>,
+	pub line_hl: &'a mut Vec<Vec<((usize, usize), String)>>,
 	pub regex_cache: &'a mut HashMap<&'static str, Regex>,
 	pub stack: &'a mut Stack,
 	pub syntax: Option<u16>,
@@ -291,6 +292,8 @@ const STYLE_RESET: &str = "\x1b[0m";
 const STYLE_INVERT_ON: &str = "\x1b[7m";
 const STYLE_INVERT_OFF: &str = "\x1b[27m";
 
+mod hl;
+use hl::*;
 
 fn main() -> io::Result<()> {
 	let pathstr: String = match std::env::args().nth(1) {
@@ -318,11 +321,13 @@ fn main() -> io::Result<()> {
 	let termsize::Size { rows, cols } = termsize::get().unwrap();
 	let mut stack = Stack::new();
 	let mut hlcache: Vec<usize> = vec![stack.empty(); buflines.len()];
+	let mut line_hl: Vec<Vec<((usize, usize), String)>> = vec![Vec::new(); buflines.len().max(1)];
 	let mut regex_cache: HashMap<&'static str, Regex> = HashMap::new();
 
 	let mut screen: View = View {
 		bufvec: &mut buflines,
 		hlcache: &mut hlcache,
+		line_hl: &mut line_hl,
 		regex_cache: &mut regex_cache,
 		stack: &mut stack,
 		syntax: filetypeid,
@@ -420,8 +425,8 @@ fn frame<W: Write>(out: &mut W, view: &View) {
 	screen.push_str(&goto(1, 1));
 
 	/* using config, push default fg & bg */
-	screen.push_str(&util::hex2ascii_bg!(crate::config::BACKGROUND));
-	screen.push_str(&util::hex2ascii!(config::SOURCE));
+	screen.push_str(&BG_DEFAULT);
+	screen.push_str(&FG_SOURCE);
 
 
 
@@ -462,6 +467,7 @@ fn frame<W: Write>(out: &mut W, view: &View) {
 			Some(x) => x,
 			None => view.bufvec.last().unwrap(),
 		};
+		let runs = view.line_hl.get(i).map(|v| v.as_slice()).unwrap_or(&[]);
 
 		let start = view.offcol.min(line.len());
 		let end = (view.offcol + view.terminal_w).min(line.len());
@@ -477,20 +483,20 @@ fn frame<W: Write>(out: &mut W, view: &View) {
 			let vis_sel_end = line_sel_end.min(end);
 
 			if vis_sel_start < vis_sel_end {
-				screen.push_str(&line[start..vis_sel_start].replace("\t", "	"));
-				screen.push_str(STYLE_INVERT_ON);
-				screen.push_str(&line[vis_sel_start..vis_sel_end].replace("\t", "	"));
-				screen.push_str(STYLE_INVERT_OFF);
-				screen.push_str(&line[vis_sel_end..end].replace("\t", "	"));
+				render_line_segment(&mut screen, line, runs, start, vis_sel_start, false);
+				render_line_segment(&mut screen, line, runs, vis_sel_start, vis_sel_end, true);
+				render_line_segment(&mut screen, line, runs, vis_sel_end, end, false);
 				continue;
 			}
 		}
 
-		screen.push_str(&line[start..end].replace("\t", "	"));
+		render_line_segment(&mut screen, line, runs, start, end, false);
 	}
 
 	screen.push_str(&goto(view.terminal_h as u16, 1));
 	screen.push_str(CLEAR_LINE);
+	screen.push_str(&BG_DEFAULT);
+	screen.push_str(&FG_SOURCE);
 	screen.push_str(&view.endline);
 	screen.push_str(CURSOR_SHOW);
 	let scr_row = view.cursor_y.saturating_sub(view.offset) + 1;
@@ -816,9 +822,13 @@ fn insert_cache_lines(view: &mut View, at: usize, count: usize) {
 		return;
 	}
 	let fill = view.stack.empty();
+	let runs_fill = Vec::new();
 	let at = at.min(view.hlcache.len());
 	view.hlcache
 		.splice(at..at, std::iter::repeat(fill).take(count));
+	let at_runs = at.min(view.line_hl.len());
+	view.line_hl
+		.splice(at_runs..at_runs, std::iter::repeat(runs_fill).take(count));
 }
 
 fn remove_cache_lines(view: &mut View, at: usize, count: usize) {
@@ -829,6 +839,11 @@ fn remove_cache_lines(view: &mut View, at: usize, count: usize) {
 	let end = (start + count).min(view.hlcache.len());
 	if start < end {
 		view.hlcache.drain(start..end);
+	}
+	let start_runs = at.min(view.line_hl.len());
+	let end_runs = (start_runs + count).min(view.line_hl.len());
+	if start_runs < end_runs {
+		view.line_hl.drain(start_runs..end_runs);
 	}
 }
 
@@ -872,6 +887,13 @@ fn ensure_cache(view: &mut View) {
 		view.hlcache.truncate(target_len);
 	}
 
+	if view.line_hl.len() < target_len {
+		view.line_hl
+			.extend(std::iter::repeat_with(Vec::new).take(target_len - view.line_hl.len()));
+	} else if view.line_hl.len() > target_len {
+		view.line_hl.truncate(target_len);
+	}
+
 	if !view.hlcache.is_empty() {
 		let main = main_frame(view);
 		view.hlcache[0] = main;
@@ -888,6 +910,9 @@ fn reparse_dirty(view: &mut View) -> String {
 	if view.syntax.is_none() {
 		ensure_cache(view);
 		let line = view.cursor_y.min(view.bufvec.len().saturating_sub(1));
+		if let Some(runs) = view.line_hl.get_mut(line) {
+			runs.clear();
+		}
 		view.recompute = line.saturating_add(1);
 		return default_scope(view);
 	}
@@ -909,6 +934,9 @@ fn reparse_dirty(view: &mut View) -> String {
 			view.hlcache[cursor_line]
 		};
 		let (scopes, _) = view.highlight_line(cursor_line, begin_frame);
+		if let Some(line_runs) = view.line_hl.get_mut(cursor_line) {
+			*line_runs = scopes.clone();
+		}
 		let cursor = if view.bufvec[cursor_line].is_empty() {
 			0
 		} else {
@@ -921,6 +949,9 @@ fn reparse_dirty(view: &mut View) -> String {
 	for line in start..=target_end {
 		let begin_frame = if line == 0 { main } else { view.hlcache[line] };
 		let (scopes, out_frame) = view.highlight_line(line, begin_frame);
+		if let Some(line_runs) = view.line_hl.get_mut(line) {
+			*line_runs = scopes.clone();
+		}
 		if line == cursor_line {
 			let cursor = if view.bufvec[line].is_empty() {
 				0
