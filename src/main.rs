@@ -514,6 +514,8 @@ fn buf_insert_lines(view: &mut View, insert: &String) {
     // with multiple lines. This function correctly handles multi-line-insertion by adding new rows
     // and splitting existing ones. It may be helpful to referece the 'enter' logic in key().
     // Replace the following todo!() with your code.
+    let insert = insert.replace('\t', "    ");
+
     if insert.is_empty() {
         return;
     }
@@ -531,7 +533,7 @@ fn buf_insert_lines(view: &mut View, insert: &String) {
 
     let parts: Vec<&str> = insert.split('\n').collect();
     if parts.len() == 1 {
-        view.bufvec[view.cursor_y].insert_str(view.cursor_x, insert);
+        view.bufvec[view.cursor_y].insert_str(view.cursor_x, &insert);
         view.cursor_x += insert.len();
         view.status.saved = false;
         return;
