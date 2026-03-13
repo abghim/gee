@@ -33,6 +33,7 @@ pub struct Status {
 }
 
 pub struct View<'a> {
+	pub working_col: usize,
 	pub bufvec: &'a mut Vec<String>,
 	pub hlcache: &'a mut Vec<usize>,
 	pub line_hl: &'a mut Vec<Vec<((usize, usize), String)>>,
@@ -325,6 +326,7 @@ fn main() -> io::Result<()> {
 	let mut regex_cache: HashMap<&'static str, Regex> = HashMap::new();
 
 	let mut screen: View = View {
+		working_col: 0,
 		bufvec: &mut buflines,
 		hlcache: &mut hlcache,
 		line_hl: &mut line_hl,
@@ -566,33 +568,27 @@ fn key(k: Key, view: &mut View) {
 				view.status.ctrlx = true;
 			}
 
-			Key::Ctrl('n') | Key::Down => {
-				// Down
-				if view.cursor_y + 1 < view.bufvec.len() {
-					view.cursor_y += 1;
-					let len = view.bufvec[view.cursor_y].len();
-					if view.cursor_x == view.bufvec[view.cursor_y.saturating_sub(1)].len() {
-						view.cursor_x = len;
-					} else {
-						view.cursor_x = view.cursor_x.min(len);
-					}
-				}
-			}
+	            Key::Ctrl('n') | Key::Down => {
+	                // Down
+	                //
+                view.working_col = view.working_col.max(view.cursor_x);
+                if view.cursor_y + 1 < view.bufvec.len() {
+                    view.cursor_y += 1;
+                    let len = view.bufvec[view.cursor_y].len();
+                    view.cursor_x = view.working_col.min(len);
+                }
+            }
 
-			Key::Ctrl('p') | Key::Up => {
-				// Up
-				if view.cursor_y > 0 {
-					view.cursor_y -= 1;
-					let len = view.bufvec[view.cursor_y].len();
-					if view.cursor_x
-						== view.bufvec[(view.cursor_y + 1).min(view.bufvec.len() - 1)].len()
-					{
-						view.cursor_x = len;
-					} else {
-						view.cursor_x = view.cursor_x.min(len);
-					}
-				}
-			}
+            Key::Ctrl('p') | Key::Up => {
+                // Up
+                view.working_col = view.working_col.max(view.cursor_x);
+
+                if view.cursor_y > 0 {
+                    view.cursor_y -= 1;
+                    let len = view.bufvec[view.cursor_y].len();
+                    view.cursor_x = view.working_col.min(len);
+                }
+            }
 
 			Key::Ctrl('b') | Key::Left => {
 				if view.cursor_x > 0 {
@@ -603,13 +599,15 @@ fn key(k: Key, view: &mut View) {
 						.get(view.cursor_x.saturating_sub(4)..view.cursor_x)
 						.is_some_and(|s| s.len() == 4 && s.iter().all(|&b| b == b' '));
 
-					let step = if can_jump4 { 4 } else { 1 };
-					view.cursor_x = view.cursor_x.saturating_sub(step);
-				} else if view.cursor_y > 0 {
-					view.cursor_y -= 1;
-					view.cursor_x = view.bufvec[view.cursor_y].len();
-				}
-			}
+                    let step = if can_jump4 { 4 } else { 1 };
+                    view.cursor_x = view.cursor_x.saturating_sub(step);
+                } else if view.cursor_y > 0 {
+                    view.cursor_y -= 1;
+                    view.cursor_x = view.bufvec[view.cursor_y].len();
+                }
+
+                view.working_col = view.cursor_x;
+            }
 
 			Key::Ctrl('f') | Key::Right => {
 				let line = &view.bufvec[view.cursor_y];
@@ -621,12 +619,15 @@ fn key(k: Key, view: &mut View) {
 						.get(view.cursor_x..view.cursor_x + 4)
 						.is_some_and(|s| s.iter().all(|&b| b == b' '));
 
-					view.cursor_x += if can_jump4 { 4 } else { 1 };
-				} else if view.cursor_y + 1 < view.bufvec.len() {
-					view.cursor_y += 1;
-					view.cursor_x = 0;
-				}
-			}
+                    view.cursor_x += if can_jump4 { 4 } else { 1 };
+                } else if view.cursor_y + 1 < view.bufvec.len() {
+                    view.cursor_y += 1;
+                    view.cursor_x = 0;
+                }
+
+                view.working_col = view.cursor_x;
+
+            }
 
 			Key::Ctrl('a') => {
 				view.cursor_x = 0;
@@ -794,12 +795,13 @@ fn key(k: Key, view: &mut View) {
 				view.status.saved = false;
 				view.status.selecting = false;
 				mark_recompute(view, view.cursor_y);
+				}
+
+				_ => {}
 			}
 
-			_ => {}
-		}
-	} else {
-		match k {
+			} else {
+			match k {
 			Key::Ctrl('c') => {
 				view.status.ctrlx = false;
 				view.status.quit = true
