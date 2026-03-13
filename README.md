@@ -1,7 +1,7 @@
 # Gee -- Good Enough Emacs
 
 Plans (Important!)
-> ![NOTE]
+> [!NOTE]
 > The most actively developed feature is syntax highlighting, under the feature/hl branch. The master branch receives less frequent updates.
 
 I plan to implement the following before launching Gee 1.0
