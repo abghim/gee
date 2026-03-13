@@ -1033,8 +1033,8 @@ fn scope_under_cursor(view: &mut View) -> String {
 
 fn update_scope_status(view: &mut View, prefix: Option<String>, scope: String) {
 	view.endline = match prefix {
-		Some(msg) if !msg.is_empty() => format!("{msg} | {scope}"),
-		_ => scope,
+		Some(msg) if !msg.is_empty() => format!("{msg}"),
+		_ => "".to_string(),
 	};
 }
 
