@@ -17,6 +17,7 @@ pub struct Status {
 }
 
 pub struct View<'a> {
+	pub working_col: usize,
     pub bufvec: &'a mut Vec<String>,
     pub cursor_x: usize,
     pub cursor_y: usize,
@@ -71,6 +72,7 @@ fn main() -> io::Result<()> {
     let termsize::Size { rows, cols } = termsize::get().unwrap();
     let mut screen: View = View {
         bufvec: &mut buflines,
+        working_col: 0,
         cursor_x: 0,
         cursor_y: 0,
         offset: 0,
@@ -256,28 +258,23 @@ fn key(k: Key, view: &mut View) {
 
             Key::Ctrl('n') | Key::Down => {
                 // Down
+                //
+                view.working_col = view.working_col.max(view.cursor_x);
                 if view.cursor_y + 1 < view.bufvec.len() {
                     view.cursor_y += 1;
                     let len = view.bufvec[view.cursor_y].len();
-                    if view.cursor_x == view.bufvec[view.cursor_y.saturating_sub(1)].len() {
-                        view.cursor_x = len;
-
-                    } else {
-                        view.cursor_x = view.cursor_x.min(len);
-                    }
+                    view.cursor_x = view.working_col.min(len);
                 }
             }
 
             Key::Ctrl('p') | Key::Up => {
                 // Up
+                view.working_col = view.working_col.max(view.cursor_x);
+
                 if view.cursor_y > 0 {
                     view.cursor_y -= 1;
                     let len = view.bufvec[view.cursor_y].len();
-                    if view.cursor_x == view.bufvec[(view.cursor_y+1).min(view.bufvec.len()-1)].len() {
-                        view.cursor_x = len;
-                    } else {
-                        view.cursor_x = view.cursor_x.min(len);
-                    }
+                    view.cursor_x = view.working_col.min(len);
                 }
             }
 
@@ -296,6 +293,8 @@ fn key(k: Key, view: &mut View) {
                     view.cursor_y -= 1;
                     view.cursor_x = view.bufvec[view.cursor_y].len();
                 }
+
+                view.working_col = view.cursor_x;
             }
 
             Key::Ctrl('f') | Key::Right => {
@@ -313,6 +312,9 @@ fn key(k: Key, view: &mut View) {
                     view.cursor_y += 1;
                     view.cursor_x = 0;
                 }
+
+                view.working_col = view.cursor_x;
+
             }
 
             Key::Ctrl('a') => {
