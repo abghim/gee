@@ -2,21 +2,166 @@ name: Rust
 
 on:
   push:
-    branches: [ "master", "feature/hl" ]
+    branches: ["master"]
   pull_request:
-    branches: [ "master" ]
+    branches: ["master"]
 
 env:
   CARGO_TERM_COLOR: always
+  BINARY_NAME: gee
 
 jobs:
-  build:
-
+  build-linux-and-cross:
+    name: ${{ matrix.artifact_name }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux GNU
+          - target: x86_64-unknown-linux-gnu
+            artifact_name: x86_64-linux-gnu
+            binary_name: gee
+            use_cross: false
+
+          - target: aarch64-unknown-linux-gnu
+            artifact_name: aarch64-linux-gnu
+            binary_name: gee
+            use_cross: true
+
+          - target: i686-unknown-linux-gnu
+            artifact_name: i686-linux-gnu
+            binary_name: gee
+            use_cross: true
+
+          # Linux musl
+          - target: x86_64-unknown-linux-musl
+            artifact_name: x86_64-linux-musl
+            binary_name: gee
+            use_cross: true
+
+          - target: aarch64-unknown-linux-musl
+            artifact_name: aarch64-linux-musl
+            binary_name: gee
+            use_cross: true
+
+          - target: i686-unknown-linux-musl
+            artifact_name: i686-linux-musl
+            binary_name: gee
+            use_cross: true
+
+          # Windows GNU cross-builds from Linux
+          - target: x86_64-pc-windows-gnu
+            artifact_name: x86_64-windows-gnu
+            binary_name: gee.exe
+            use_cross: true
+
+          - target: i686-pc-windows-gnu
+            artifact_name: i686-windows-gnu
+            binary_name: gee.exe
+            use_cross: true
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      - uses: actions/checkout@v4
+
+      - name: Install target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install cross
+        if: ${{ matrix.use_cross }}
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build
+        shell: bash
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross build --release --target "${{ matrix.target }}"
+          else
+            cargo build --release --target "${{ matrix.target }}"
+          fi
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "dist/${{ matrix.binary_name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/*
+
+  build-macos:
+    name: ${{ matrix.artifact_name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+            artifact_name: x86_64-apple-darwin
+            binary_name: gee
+
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: aarch64-apple-darwin
+            binary_name: gee
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --target "${{ matrix.target }}"
+
+      - name: Package artifact
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "dist/${{ matrix.binary_name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/*
+
+  build-windows-msvc:
+    name: ${{ matrix.artifact_name }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            artifact_name: x86_64-windows-msvc
+            binary_name: gee.exe
+
+          - target: i686-pc-windows-msvc
+            artifact_name: i686-windows-msvc
+            binary_name: gee.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build
+        shell: pwsh
+        run: cargo build --release --target "${{ matrix.target }}"
+
+      - name: Package artifact
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "dist/${{ matrix.binary_name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: dist/*
