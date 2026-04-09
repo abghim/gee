@@ -17,7 +17,7 @@ pub struct Status {
 }
 
 pub struct View<'a> {
-	pub working_col: usize,
+    pub working_col: usize,
     pub bufvec: &'a mut Vec<String>,
     pub cursor_x: usize,
     pub cursor_y: usize,
@@ -101,10 +101,9 @@ fn main() -> io::Result<()> {
     for k in stdin.keys() {
         let k = k?;
         key(k, &mut screen);
-       	let termsize::Size { rows, cols } = termsize::get().unwrap();
+        let termsize::Size { rows, cols } = termsize::get().unwrap();
         screen.terminal_w = cols as usize;
         screen.terminal_h = rows as usize;
-
 
         clamp(&mut screen);
 
@@ -314,7 +313,6 @@ fn key(k: Key, view: &mut View) {
                 }
 
                 view.working_col = view.cursor_x;
-
             }
 
             Key::Ctrl('a') => {
