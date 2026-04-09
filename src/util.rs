@@ -26,15 +26,15 @@ pub(crate) use hex2ascii_bg;
 
 #[cfg(test)]
 mod tests {
-	use super::*;
+    use super::*;
 
-	#[test]
-	fn hextest1() {
-		assert_eq!(hex2ascii!(0x123456), "\x1b[38;2;18;52;86m");
-	}
+    #[test]
+    fn hextest1() {
+        assert_eq!(hex2ascii!(0x123456), "\x1b[38;2;18;52;86m");
+    }
 
-	#[test]
-	fn hextest_bg() {
-		assert_eq!(hex2ascii_bg!(0xabcdef), "\x1b[48;2;171;205;239m");
-	}
+    #[test]
+    fn hextest_bg() {
+        assert_eq!(hex2ascii_bg!(0xabcdef), "\x1b[48;2;171;205;239m");
+    }
 }
