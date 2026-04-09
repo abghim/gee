@@ -50,17 +50,6 @@ jobs:
             binary_name: gee
             use_cross: true
 
-          # Windows GNU cross-builds from Linux
-          - target: x86_64-pc-windows-gnu
-            artifact_name: x86_64-windows-gnu
-            binary_name: gee.exe
-            use_cross: true
-
-          - target: i686-pc-windows-gnu
-            artifact_name: i686-windows-gnu
-            binary_name: gee.exe
-            use_cross: true
-
     steps:
       - uses: actions/checkout@v4
 
@@ -129,20 +118,6 @@ jobs:
           name: ${{ matrix.artifact_name }}
           path: dist/*
 
-  build-windows-msvc:
-    name: ${{ matrix.artifact_name }}
-    runs-on: windows-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - target: x86_64-pc-windows-msvc
-            artifact_name: x86_64-windows-msvc
-            binary_name: gee.exe
-
-          - target: i686-pc-windows-msvc
-            artifact_name: i686-windows-msvc
-            binary_name: gee.exe
 
     steps:
       - uses: actions/checkout@v4
